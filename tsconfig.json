@@ -1,0 +1,33 @@
+{
+	"compilerOptions": {
+		"target": "ES2023",
+		/* This package is the BROWSER tier: it speaks BroadcastChannel,
+		   PerformanceObserver, OPFS and Worker. DOM + WebWorker are part of its
+		   contract, not an accident. `node` is here only for the test-only
+		   fixture loader and the workflow-security spec; no src module that
+		   ships imports node:*, and tsconfig.build.json excludes both. */
+		"lib": ["ES2023", "DOM", "DOM.Iterable", "WebWorker"],
+		"types": ["node"],
+		"module": "ESNext",
+		/* Bundler resolution: relative imports stay extensionless, which is what
+		   every consumer of this package (a Vite browser app) resolves. See the
+		   README's "Consuming this package" note — it is not bare-Node ESM. */
+		"moduleResolution": "Bundler",
+		"moduleDetection": "force",
+		"verbatimModuleSyntax": true,
+		"isolatedModules": true,
+		"skipLibCheck": true,
+		"noEmit": true,
+
+		/* Linting */
+		"strict": true,
+		"noUnusedLocals": true,
+		"noUnusedParameters": true,
+		"noUncheckedIndexedAccess": true,
+		"noImplicitOverride": true,
+		"exactOptionalPropertyTypes": true,
+		"erasableSyntaxOnly": true,
+		"noFallthroughCasesInSwitch": true
+	},
+	"include": ["src", "test", "vitest.config.ts"]
+}

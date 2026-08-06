@@ -1,0 +1,21 @@
+{
+	"extends": "./tsconfig.json",
+	"compilerOptions": {
+		"noEmit": false,
+		"outDir": "dist",
+		"rootDir": "src",
+		"declaration": true,
+		"declarationMap": true,
+		"sourceMap": true,
+		/* Nothing that ships touches node:*. Dropping the node types here is the
+		   compile-time proof of that, not a comment claiming it. */
+		"types": []
+	},
+	"include": ["src"],
+	"exclude": [
+		"src/**/*.test.ts",
+		"src/engine/fixtures.ts",
+		"src/engine/__fixtures__/**",
+		"test"
+	]
+}

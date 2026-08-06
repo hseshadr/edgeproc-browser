@@ -1,0 +1,76 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  # gitleaks — full-history secret scan on EVERY pull request, via the shared
+  # brick in hseshadr/ci. It runs at the PR because a secret is the one defect
+  # you cannot fix by reverting: once a credential lands in this public history
+  # it is burned, and a revert only hides it from HEAD.
+  #
+  # The brick checks out with fetch-depth: 0 and scans every commit, not just
+  # the diff. This repo ships no .gitleaks.toml; the default ruleset applies.
+  gitleaks:
+    name: Secret scan
+    # The reusable workflow lists a PR's commits over the API, which needs
+    # pull-requests: read. The workflow-level `contents: read` does not grant it,
+    # and a caller job may raise a scope the read-only top level withholds.
+    permissions:
+      contents: read
+      pull-requests: read
+    # Pinned to a 40-char commit SHA, not `@ci-v3`: a tag can be repointed at new
+    # code, and this job runs with this repo's token. The trailing comment names
+    # the EXACT release so Dependabot bumps pin and comment together — a floating
+    # `# ci-v3` would silently go wrong the moment upstream moves that tag.
+    # `ci-v3.2.1` is an ANNOTATED tag: refs/tags/ci-v3.2.1 is tag object
+    # edbd737de70ba1bc1b135353fe15e595d371e701, whose commit is the SHA below.
+    # Pinning is transitive and holds here: at this SHA the brick's own two
+    # `uses:` refs (actions/checkout, gitleaks/gitleaks-action) are both SHAs.
+    uses: hseshadr/ci/.github/workflows/secret-scan.yml@605e51cbc86f452b56edcf1c9660921da797cbfe # ci-v3.2.1
+
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      # Every `uses:` below names a full 40-char commit SHA, not a moving tag. A
+      # tag can be repointed at new code; a SHA cannot. The trailing comment
+      # records which release that SHA is, so Dependabot's `github-actions`
+      # ecosystem bumps both the pin and the comment.
+      # test/workflow-security.test.ts enforces this and can fail — it is paired
+      # with accept/reject cases so the RULE is proven, not just applied.
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          # The gate never pushes, so leaving the token in .git/config would only
+          # widen what a compromised step can reach.
+          persist-credentials: false
+
+      - name: Install pnpm
+        # Version comes from package.json "packageManager" — one pin, no drift.
+        # The comment names the EXACT release, not `# v6`: a floating major on an
+        # immutable SHA is the pattern that turned hseshadr/ci main red on
+        # 2026-08-03 with no commit in the repo. This SHA is v6.0.9.
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+
+      - name: Setup Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        # dangerously-allow-all-builds lets the trusted toolchain binaries
+        # (biome, esbuild) build non-interactively in CI.
+        run: pnpm install --frozen-lockfile --config.dangerously-allow-all-builds=true
+
+      - name: Gate (the exact local command — CI mirrors the gate)
+        # lint -> typecheck -> BUILD -> test. The build comes before the tests on
+        # purpose: test/dist-contract.test.ts inspects real build output, because
+        # `files: ["dist"]` means consumers get only that, and a claim that holds
+        # in src/ and fails in dist/ is invisible to every source-level test.
+        run: pnpm gate

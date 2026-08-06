@@ -1,0 +1,78 @@
+{
+	"name": "@edgeproc/browser",
+	"version": "0.1.0",
+	"type": "module",
+	"description": "The local-processing substrate of edge-proc, for the browser: sync a signed, content-addressed bundle into OPFS (ed25519 + sha256, fail-closed), run it in a Worker, and see the Worker's network traffic from the main thread.",
+	"keywords": [
+		"local-first",
+		"offline-first",
+		"opfs",
+		"web-worker",
+		"ed25519",
+		"content-addressed",
+		"zstd",
+		"integrity",
+		"signed-bundle",
+		"browser",
+		"typescript"
+	],
+	"license": "MIT",
+	"author": "Harish Seshadri",
+	"homepage": "https://github.com/hseshadr/edgeproc-browser#readme",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/hseshadr/edgeproc-browser.git"
+	},
+	"bugs": {
+		"url": "https://github.com/hseshadr/edgeproc-browser/issues"
+	},
+	"publishConfig": {
+		"access": "public"
+	},
+	"packageManager": "pnpm@11.5.0",
+	"engines": {
+		"node": ">=22.13"
+	},
+	"files": [
+		"dist"
+	],
+	"main": "./dist/index.js",
+	"module": "./dist/index.js",
+	"types": "./dist/index.d.ts",
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"import": "./dist/index.js"
+		},
+		"./worker": {
+			"types": "./dist/engine/worker.d.ts",
+			"import": "./dist/engine/worker.js"
+		},
+		"./package.json": "./package.json"
+	},
+	"sideEffects": [
+		"./dist/engine/worker.js"
+	],
+	"scripts": {
+		"build": "tsc -p tsconfig.build.json",
+		"typecheck": "tsc -p tsconfig.json --noEmit",
+		"test": "vitest run --coverage",
+		"test:watch": "vitest",
+		"lint": "biome check .",
+		"lint:fix": "biome check --write .",
+		"demo": "pnpm build && node examples/quickstart.mjs",
+		"gate": "pnpm lint && pnpm typecheck && pnpm build && pnpm test"
+	},
+	"dependencies": {
+		"@hpcc-js/wasm-zstd": "^1.15.0",
+		"@noble/ed25519": "^3.1.0"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "^2.5.5",
+		"@types/node": "^26.1.2",
+		"@vitest/coverage-v8": "^4.1.10",
+		"jsdom": "^30.0.0",
+		"typescript": "~7.0.2",
+		"vitest": "^4.1.10"
+	}
+}

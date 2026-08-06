@@ -1,0 +1,77 @@
+# edgeproc-browser — .github/workflows/publish.yml
+#
+# npm release of `@edgeproc/browser` via OIDC Trusted Publishing. Pushing a `v*` tag is the
+# whole trigger. There is NO npm write token in this repository, and there must never be one:
+# the credential is a short-lived OIDC token GitHub mints for this job, which npm verifies
+# against a trusted publisher registered as {hseshadr, edgeproc-browser, publish.yml}.
+#
+# ─────────────────────────────────────────────────────────────────────────────────────────
+# READ THIS BEFORE THE FIRST RELEASE — the first publish CANNOT use this rail.
+# ─────────────────────────────────────────────────────────────────────────────────────────
+# npm has no "pending publisher". A trusted publisher is attached to an EXISTING package, so
+# a name that has never been published has nothing to attach it to. This is a fact about npm,
+# not a gap in this workflow, and no amount of retrying a tag push will get around it.
+#
+# So `@edgeproc/browser@0.1.0` has to go out ONCE by hand, from an authenticated session
+# (`npm publish --access public`). Only after the package exists can the trusted publisher be
+# registered — and from then on every release is a `v*` tag push through here, token-free.
+#
+# The bootstrap, in order:
+#   1. Make this repository PUBLIC. `provenance: true` below signs each release into a
+#      PUBLIC transparency log, which npm refuses to do for a private source repo. Flip it
+#      before tagging or the publish fails.
+#   2. `npm login`, then publish 0.1.0 by hand. (One time, for this package name only.)
+#   3. Register the trusted publisher. As of npm 11.17 this is a CLI, not browser-only:
+#        npm trust github @edgeproc/browser --file publish.yml \
+#          --repo hseshadr/edgeproc-browser --allow-publish
+#      It prompts for an OTP via a URL. `npm access` does NOT cover trusted publishers.
+#   4. Every release after that: bump the version, land it on `main`, push `vX.Y.Z`.
+#   5. Branch protection LAST, and only while the repo has 0 open PRs — protecting with PRs
+#      open leaves each one BLOCKED with no way to self-approve.
+#
+# Consequence worth stating plainly: 0.1.0 permanently carries NO provenance, and a published
+# version is immutable so it can never be re-published to add it. The first release through
+# this rail should therefore be a PATCH (0.1.1) whose only change IS the provenance — that is
+# what `errors` did, and `^0.1.0` consumers pick it up with no code change.
+#
+# Two more npm truths this caller encodes (see ts-publish.yml in hseshadr/ci):
+#   * Re-tagging v0.1.0 just 403s. The next release must carry a HIGHER version.
+#   * `package.json` `repository.url` MUST match this GitHub repo exactly or the OIDC publish
+#     fails with ENEEDAUTH. It does: git+https://github.com/hseshadr/edgeproc-browser.git
+#
+# WHY THE PIN IS A SHA, NOT `@ci-v3`: a tag can be repointed at new code; a 40-char commit
+# SHA cannot. That matters most here, because this job holds `id-token: write` — a mutable
+# ref anywhere in the chain reaches npm. The trailing comment records which release the SHA
+# is, and `test/workflow-security.test.ts` fails the gate if any ref here is left unpinned.
+name: Publish (npm, OIDC)
+
+on:
+  push:
+    tags: ["v*"]
+
+# Top-level is read-only. The OIDC scope is granted on the publish job alone — a top-level
+# scope applies to every job in the file, including ones added later that have no business
+# minting a token.
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    permissions:
+      id-token: write # OIDC — this token IS the npm credential. Nothing else may hold it.
+      contents: read
+    uses: hseshadr/ci/.github/workflows/ts-publish.yml@605e51cbc86f452b56edcf1c9660921da797cbfe # ci-v3.2.1
+    with:
+      working-directory: "."
+      node-version: "24"
+      # Mirrors ci.yml exactly. allow-all-builds lets the trusted toolchain binaries (biome,
+      # esbuild) run their postinstall non-interactively; without it pnpm blocks and the
+      # install hangs rather than failing loudly.
+      install-args: "--frozen-lockfile --config.dangerously-allow-all-builds=true"
+      # The gate is lint -> typecheck -> build -> vitest (with the dist-contract spec reading
+      # real build output), no browser dependency, so re-running it from the TAGGED ref is
+      # cheap and is the only thing that proves the artefact being published is the artefact
+      # that passed.
+      run-gate: true
+      # Requires a PUBLIC repo — see step 1 of the bootstrap above.
+      provenance: true
