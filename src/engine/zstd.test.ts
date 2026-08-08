@@ -80,6 +80,18 @@ describe("decompressBounded", () => {
 		expect(await sha256Hex(plaintext)).toBe(REAL_CHUNK);
 	});
 
+	// Zero is the boundary every bound gets wrong in the same direction. A
+	// `size > 0` guard, or a falsy check on the declared size, turns a legal
+	// empty chunk into a refusal — or worse, treats "declares nothing" and
+	// "declares zero" as the same thing and lets an undeclared frame through.
+	// An empty file is ordinary bundle content, so it has to decode, at exactly
+	// its signed size of 0.
+	it("accepts an exactly empty signed chunk without allowing overflow", async () => {
+		await expect(
+			decompressBounded(zstd.compress(new Uint8Array()), 0),
+		).resolves.toEqual(new Uint8Array());
+	});
+
 	// The pre-decode guard is only safe to ship if EVERY chunk the Python
 	// producer writes declares its size. Checked against the whole committed
 	// bundle, not one sample, so a producer that ever switched to streaming
