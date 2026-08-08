@@ -637,41 +637,69 @@ describe("bounded sync resources", () => {
 
 	// The aggregate cap has to be RESERVED, not reconciled. Chunk downloads run
 	// eight at a time, so a budget checked only after each response resolves is
-	// a budget eight requests can blow past together. What proves the reservation
-	// is the per-request ceiling each fetch is HANDED: summed, it never exceeds
-	// the aggregate, which is only true if the budget was debited before the
-	// concurrent calls went out.
+	// a budget eight requests can blow past together — every one of them sees
+	// the same untouched balance and every one of them is allowed.
+	//
+	// What proves reservation is the ceiling each in-flight fetch is HANDED,
+	// summed ACROSS THE FETCHES THAT OVERLAP. The sum over the whole run is not
+	// the invariant: a reservation returns its unspent remainder on release, so
+	// the run total legitimately exceeds the cap. Peak concurrent outstanding is
+	// the number that can only stay under the cap if the budget was debited
+	// before the calls went out.
+	//
+	// The chunk hashes must be DISTINCT. An earlier version of this test used
+	// eight copies of one hash; sync dedupes to the distinct set, so exactly one
+	// fetch ever ran and no concurrency was exercised at all. It passed with the
+	// reservation deleted — it was measuring shape, and this comment is here so
+	// nobody rebuilds it that way.
 	it("reserves the aggregate cap before concurrent chunk downloads", async () => {
 		const zstd = await Zstd.load();
-		const bytes = ENCODER.encode("bounded");
-		const hash = await sha256Hex(bytes);
-		const refs = Array.from({ length: 8 }, () => ({
-			hash,
-			size: bytes.byteLength,
-		}));
-		const fileBytes = new Uint8Array(bytes.length * refs.length);
-		for (let index = 0; index < refs.length; index += 1) {
-			fileBytes.set(bytes, index * bytes.length);
+		const chunks = new Map<string, Uint8Array>();
+		const refs: { hash: string; size: number }[] = [];
+		const plaintexts: string[] = [];
+		for (let index = 0; index < 12; index += 1) {
+			const text = `distinct bounded chunk ${index}`;
+			const bytes = ENCODER.encode(text);
+			const hash = await sha256Hex(bytes);
+			plaintexts.push(text);
+			refs.push({ hash, size: bytes.byteLength });
+			chunks.set(hash, zstd.compress(bytes));
 		}
+		const fileBytes = ENCODER.encode(plaintexts.join(""));
 		const manifest = emptyManifest({
 			files: [
 				{
 					path: "bounded.bin",
 					file_type: null,
-					size: bytes.byteLength * refs.length,
+					size: fileBytes.byteLength,
 					file_sha256: await sha256Hex(fileBytes),
 					chunks: refs,
 				},
 			],
 		});
-		const origin = await originFor(
-			manifest,
-			new Map([[hash, zstd.compress(bytes)]]),
-		);
-		const reservations: number[] = [];
-		const fetchBytes: FetchBytes = (url, options) => {
-			if (url.includes("/chunk/")) reservations.push(options?.maxBytes ?? 0);
-			return origin.fetchBytes(url, options);
+		const origin = await originFor(manifest, chunks);
+
+		// Big enough that all twelve chunks fit inside the budget (so the run
+		// SUCCEEDS and the assertion is about reservation, not about refusal),
+		// and far below MAX_COMPRESSED_CHUNK_BYTES so each reservation claims the
+		// whole remaining balance — which is what forces contention.
+		const cap = 4096;
+		let outstanding = 0;
+		let peak = 0;
+		let chunkFetches = 0;
+		const fetchBytes: FetchBytes = async (url, options) => {
+			if (!url.includes("/chunk/")) return origin.fetchBytes(url, options);
+			const reserved = options?.maxBytes ?? 0;
+			chunkFetches += 1;
+			outstanding += reserved;
+			peak = Math.max(peak, outstanding);
+			try {
+				// Hold the request open so genuinely concurrent fetches overlap.
+				await new Promise((resolve) => setTimeout(resolve, 2));
+				return await origin.fetchBytes(url, options);
+			} finally {
+				outstanding -= reserved;
+			}
 		};
 
 		await syncIndex({
@@ -679,13 +707,13 @@ describe("bounded sync resources", () => {
 			store: new MemoryCacheStore(),
 			fetchBytes,
 			verify: passVerify,
-			limits: { maxTotalFetchBytes: 256 },
+			limits: { maxTotalFetchBytes: cap },
 		});
 
-		expect(reservations.length).toBeGreaterThan(0);
-		expect(
-			reservations.reduce((sum, value) => sum + value, 0),
-		).toBeLessThanOrEqual(256);
+		// Vacuity guard: without several real chunk fetches there is no
+		// concurrency to bound and the assertion below proves nothing.
+		expect(chunkFetches).toBe(refs.length);
+		expect(peak).toBeLessThanOrEqual(cap);
 	});
 
 	// Zero is not "no limit". A cap the caller injects is a number sync must
