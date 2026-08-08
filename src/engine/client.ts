@@ -7,6 +7,14 @@
 // in-flight request is rejected with a typed WorkerCrashError (and the client
 // latches, failing subsequent requests fast). A silent Worker is bounded by a
 // per-request response deadline that rejects with WorkerTimeoutError.
+//
+// EVERY failure path also TERMINATES the Worker, and that is the load-bearing
+// half. An 'error' event is an uncaught throw inside the Worker, not proof the
+// Worker died; a deadline expiring says nothing about the Worker at all. Left
+// running, either one keeps its OPFS sync access handle — which is exclusive,
+// so the next EngineClient cannot open the store — while no caller will ever
+// read from it again. Settling the promises without releasing the thread just
+// trades a hung caller for a leaked one.
 
 import type { EngineRequest, EngineResponse } from "./protocol.js";
 import type { SyncResult } from "./types.js";
@@ -49,6 +57,7 @@ export class EngineClient {
 	#nextId = 0;
 	#crash: WorkerCrashError | undefined;
 	#disposed = false;
+	#released = false;
 
 	public constructor(
 		worker: EngineWorkerLike,
@@ -128,7 +137,6 @@ export class EngineClient {
 		}
 		this.#disposed = true;
 		this.#onCrash("engine worker disposed");
-		this.#worker.terminate();
 	}
 
 	/** Backwards-compatible alias for callers that own the raw worker lifecycle. */
@@ -157,6 +165,13 @@ export class EngineClient {
 						`engine request ${request.id} (${request.kind}) exceeded ${this.#timeoutMs}ms`,
 					),
 				);
+				// The caller's promise is settled, but nothing has bounded the
+				// WORKER yet — it is still running whatever went silent. Release
+				// it and latch, so the next request fails fast instead of being
+				// posted into the same silence.
+				this.#onCrash(
+					`request ${request.id} (${request.kind}) went unanswered for ${this.#timeoutMs}ms`,
+				);
 			}, this.#timeoutMs);
 			this.#pending.set(request.id, { resolve, reject, timer });
 			this.#worker.postMessage(request);
@@ -180,5 +195,15 @@ export class EngineClient {
 			pending.reject(this.#crash);
 		}
 		this.#pending.clear();
+		this.#releaseWorker();
+	}
+
+	/** Terminate exactly once, however many failure paths reach it. */
+	#releaseWorker(): void {
+		if (this.#released) {
+			return;
+		}
+		this.#released = true;
+		this.#worker.terminate();
 	}
 }

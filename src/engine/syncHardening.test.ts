@@ -1,11 +1,13 @@
 import { Zstd } from "@hpcc-js/wasm-zstd";
 import { describe, expect, it } from "vitest";
 import { sha256Hex } from "./crypto.js";
+import { NetworkError } from "./fetchBytes.js";
 import { IntegrityError } from "./integrity.js";
 import { MemoryCacheStore } from "./memoryStore.js";
-import { RollbackError, syncIndex } from "./sync.js";
+import { materializeFile, RollbackError, syncIndex } from "./sync.js";
 import type {
 	FetchBytes,
+	FileEntry,
 	IndexManifest,
 	Verify,
 	VersionPointer,
@@ -13,6 +15,9 @@ import type {
 
 const ENCODER = new TextEncoder();
 const passVerify: Verify = () => Promise.resolve();
+/** sha256 of zero bytes — the file hash of an empty, chunk-less file entry. */
+const EMPTY_HASH =
+	"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
 
 interface SyntheticOrigin {
 	readonly fetchBytes: FetchBytes;
@@ -77,6 +82,234 @@ function pointerFetch(
 		return origin.fetchBytes(url, options);
 	};
 }
+
+/** A zero-byte, chunk-less file — enough manifest shape to reach a guard. */
+function emptyFile(path = "empty.bin"): FileEntry {
+	return {
+		path,
+		file_type: null,
+		size: 0,
+		file_sha256: EMPTY_HASH,
+		chunks: [],
+	};
+}
+
+describe("the incoming pointer is validated before it is acted on", () => {
+	// A malformed pointer must be refused on the ONE fetch that produced it.
+	// `requests === 1` is the whole assertion: if any of these shapes reaches
+	// the manifest fetch, the client has already spent a round trip acting on
+	// bytes it never validated. Every case here is a distinct parse branch.
+	it.each([
+		["a null pointer", null],
+		["an invalid manifest hash", { manifest_hash: "not-a-hash" }],
+		["an empty version", { version: "" }],
+		["an empty signature", { signature: "" }],
+		["a negative sequence", { sequence: -1 }],
+		["a non-string identity", { bundle_id: 7 }],
+	])("rejects %s before any immutable fetch", async (_label, malformed) => {
+		const origin = await originFor(emptyManifest());
+		const value =
+			malformed === null ? null : { ...origin.pointer, ...malformed };
+		let requests = 0;
+		const fetchBytes: FetchBytes = () => {
+			requests += 1;
+			return Promise.resolve(ENCODER.encode(JSON.stringify(value)));
+		};
+
+		await expect(
+			syncIndex({
+				baseUrl: "/o",
+				store: new MemoryCacheStore(),
+				fetchBytes,
+				verify: passVerify,
+			}),
+		).rejects.toBeInstanceOf(IntegrityError);
+		expect(requests).toBe(1);
+	});
+
+	// The pins are checked on the CACHED pointer too. Offline is the moment a
+	// caller most wants an answer, and it is exactly where an identity check
+	// that only runs on the network path would silently stop running.
+	it("applies identity pins to an offline cached pointer", async () => {
+		const origin = await originFor(emptyManifest());
+		const store = new MemoryCacheStore();
+		await syncIndex({ ...origin, baseUrl: "/o", store, verify: passVerify });
+
+		await expect(
+			syncIndex({
+				baseUrl: "/o",
+				store,
+				fetchBytes: () => Promise.reject(new NetworkError("offline")),
+				verify: passVerify,
+				expectedBundleId: "some-other-bundle",
+				expectedChannel: "stable",
+			}),
+		).rejects.toThrow(/expected bundle identity/iu);
+	});
+
+	// The identity fields are OPTIONAL on the wire. A pointer that carries no
+	// bundle_id/channel still syncs and still gets a sequence — the pins bind
+	// only what the caller asked to bind.
+	it("syncs an identity-less pointer when the caller pins nothing", async () => {
+		const origin = await originFor(emptyManifest());
+		const {
+			bundle_id: _bundleId,
+			channel: _channel,
+			...unbound
+		} = origin.pointer;
+		const store = new MemoryCacheStore();
+		const fetchBytes: FetchBytes = (url, options) =>
+			url.endsWith("/latest")
+				? Promise.resolve(ENCODER.encode(JSON.stringify(unbound)))
+				: origin.fetchBytes(url, options);
+
+		await syncIndex({ baseUrl: "/o", store, fetchBytes, verify: passVerify });
+
+		expect((await store.readActive())?.sequence).toBe(1);
+	});
+
+	// Both pins refuse on the pointer, before the manifest fetch, and promote
+	// nothing — a wrong bundle must cost exactly one request.
+	it.each([
+		["bundle identity", { expectedBundleId: "some-other-bundle" }],
+		["release channel", { expectedChannel: "preview" }],
+	])(
+		"rejects the wrong expected %s before fetching its manifest",
+		async (_label, pin) => {
+			const origin = await originFor(emptyManifest());
+			const store = new MemoryCacheStore();
+
+			await expect(
+				syncIndex({
+					...origin,
+					...pin,
+					baseUrl: "/o",
+					store,
+					verify: passVerify,
+				}),
+			).rejects.toThrow(/expected/iu);
+			expect(origin.requestCount()).toBe(1);
+			expect(await store.readActive()).toBeNull();
+		},
+	);
+
+	// The pointer is signed; the manifest is not. It is bound to the pointer by
+	// content address, so any field the two both carry must agree or one of
+	// them is not the thing that was signed.
+	it.each([
+		["version", { version: "other" }],
+		["bundle identity", { bundle_id: "other" }],
+	] as const)(
+		"rejects pointer/manifest %s disagreement",
+		async (_l, pointer) => {
+			const origin = await originFor(emptyManifest());
+
+			await expect(
+				syncIndex({
+					baseUrl: "/o",
+					store: new MemoryCacheStore(),
+					fetchBytes: pointerFetch(origin, pointer),
+					verify: passVerify,
+				}),
+			).rejects.toThrow(/differ/iu);
+		},
+	);
+
+	// An INJECTED transport is not trusted to have honoured the cap it was
+	// handed. sync re-measures what came back, because `fetchBytes` is a seam a
+	// consumer supplies and the cap is sync's invariant, not the transport's.
+	it("rejects an injected transport response above the caller's cap", async () => {
+		const origin = await originFor(emptyManifest());
+		const oversized = `${JSON.stringify(origin.pointer)}${" ".repeat(16 * 1024)}`;
+
+		await expect(
+			syncIndex({
+				baseUrl: "/o",
+				store: new MemoryCacheStore(),
+				fetchBytes: () => Promise.resolve(ENCODER.encode(oversized)),
+				verify: passVerify,
+			}),
+		).rejects.toThrow(/response cap/iu);
+	});
+});
+
+describe("manifest shape is validated before a single chunk is fetched", () => {
+	// Two entries for one path: the second silently wins on any map-building
+	// reader, so which bytes land under that name stops being determined by the
+	// signature.
+	it("rejects duplicate file paths", async () => {
+		const origin = await originFor(
+			emptyManifest({ files: [emptyFile(), emptyFile()] }),
+		);
+
+		await expect(
+			syncIndex({
+				...origin,
+				baseUrl: "/o",
+				store: new MemoryCacheStore(),
+				verify: passVerify,
+			}),
+		).rejects.toThrow(/repeats path/iu);
+	});
+
+	// One content hash, two declared sizes. The store is keyed by hash, so the
+	// second size would be checked against bytes fetched under the first —
+	// a manifest that cannot be self-consistent must not be acted on at all.
+	it("rejects conflicting sizes for one content hash", async () => {
+		const hash = "a".repeat(64);
+		const files = [1, 2].map((size, index) => ({
+			...emptyFile(`f-${index}`),
+			size,
+			chunks: [{ hash, size }],
+		}));
+		const origin = await originFor(emptyManifest({ files }));
+
+		await expect(
+			syncIndex({
+				...origin,
+				baseUrl: "/o",
+				store: new MemoryCacheStore(),
+				verify: passVerify,
+			}),
+		).rejects.toThrow(/conflicting sizes/iu);
+	});
+
+	// The UNCOMPRESSED total, which is the number that decides how much memory
+	// reassembly will ask for. Bounding only the fetched (compressed) bytes
+	// leaves the expansion factor attacker-controlled.
+	it("rejects excessive aggregate uncompressed file bytes", async () => {
+		const chunk = { hash: "b".repeat(64), size: 8 * 1024 * 1024 };
+		const files = Array.from({ length: 3 }, (_, index) => ({
+			...emptyFile(`large-${index}`),
+			size: 256 * 1024 * 1024,
+			chunks: Array.from({ length: 32 }, () => chunk),
+		}));
+		const origin = await originFor(emptyManifest({ files }));
+
+		await expect(
+			syncIndex({
+				...origin,
+				baseUrl: "/o",
+				store: new MemoryCacheStore(),
+				verify: passVerify,
+			}),
+		).rejects.toThrow(/uncompressed cap/iu);
+	});
+
+	// An unknown schema means the guards below were written against a shape
+	// this manifest may not have. Two requests: pointer, manifest — and then it
+	// stops, rather than interpreting v3 fields with v2 rules.
+	it("rejects an unknown manifest schema before fetching chunks", async () => {
+		const origin = await originFor(emptyManifest({ schema_version: 3 }));
+		const store = new MemoryCacheStore();
+
+		await expect(
+			syncIndex({ ...origin, baseUrl: "/o", store, verify: passVerify }),
+		).rejects.toThrow(/schema/iu);
+		expect(origin.requestCount()).toBe(2);
+		expect(await store.readActive()).toBeNull();
+	});
+});
 
 describe("signed monotonic pointer contract", () => {
 	it("rejects a lower sequence before fetching its manifest", async () => {
@@ -400,5 +633,147 @@ describe("bounded sync resources", () => {
 			syncIndex({ ...origin, baseUrl: "/o", store, verify: passVerify }),
 		).rejects.toBeInstanceOf(IntegrityError);
 		expect(await store.readActive()).toBeNull();
+	});
+
+	// The aggregate cap has to be RESERVED, not reconciled. Chunk downloads run
+	// eight at a time, so a budget checked only after each response resolves is
+	// a budget eight requests can blow past together — every one of them sees
+	// the same untouched balance and every one of them is allowed.
+	//
+	// What proves reservation is the ceiling each in-flight fetch is HANDED,
+	// summed ACROSS THE FETCHES THAT OVERLAP. The sum over the whole run is not
+	// the invariant: a reservation returns its unspent remainder on release, so
+	// the run total legitimately exceeds the cap. Peak concurrent outstanding is
+	// the number that can only stay under the cap if the budget was debited
+	// before the calls went out.
+	//
+	// The chunk hashes must be DISTINCT. An earlier version of this test used
+	// eight copies of one hash; sync dedupes to the distinct set, so exactly one
+	// fetch ever ran and no concurrency was exercised at all. It passed with the
+	// reservation deleted — it was measuring shape, and this comment is here so
+	// nobody rebuilds it that way.
+	it("reserves the aggregate cap before concurrent chunk downloads", async () => {
+		const zstd = await Zstd.load();
+		const chunks = new Map<string, Uint8Array>();
+		const refs: { hash: string; size: number }[] = [];
+		const plaintexts: string[] = [];
+		for (let index = 0; index < 12; index += 1) {
+			const text = `distinct bounded chunk ${index}`;
+			const bytes = ENCODER.encode(text);
+			const hash = await sha256Hex(bytes);
+			plaintexts.push(text);
+			refs.push({ hash, size: bytes.byteLength });
+			chunks.set(hash, zstd.compress(bytes));
+		}
+		const fileBytes = ENCODER.encode(plaintexts.join(""));
+		const manifest = emptyManifest({
+			files: [
+				{
+					path: "bounded.bin",
+					file_type: null,
+					size: fileBytes.byteLength,
+					file_sha256: await sha256Hex(fileBytes),
+					chunks: refs,
+				},
+			],
+		});
+		const origin = await originFor(manifest, chunks);
+
+		// Big enough that all twelve chunks fit inside the budget (so the run
+		// SUCCEEDS and the assertion is about reservation, not about refusal),
+		// and far below MAX_COMPRESSED_CHUNK_BYTES so each reservation claims the
+		// whole remaining balance — which is what forces contention.
+		const cap = 4096;
+		let outstanding = 0;
+		let peak = 0;
+		let chunkFetches = 0;
+		const fetchBytes: FetchBytes = async (url, options) => {
+			if (!url.includes("/chunk/")) return origin.fetchBytes(url, options);
+			const reserved = options?.maxBytes ?? 0;
+			chunkFetches += 1;
+			outstanding += reserved;
+			peak = Math.max(peak, outstanding);
+			try {
+				// Hold the request open so genuinely concurrent fetches overlap.
+				await new Promise((resolve) => setTimeout(resolve, 2));
+				return await origin.fetchBytes(url, options);
+			} finally {
+				outstanding -= reserved;
+			}
+		};
+
+		await syncIndex({
+			baseUrl: "/o",
+			store: new MemoryCacheStore(),
+			fetchBytes,
+			verify: passVerify,
+			limits: { maxTotalFetchBytes: cap },
+		});
+
+		// Vacuity guard: without several real chunk fetches there is no
+		// concurrency to bound and the assertion below proves nothing.
+		expect(chunkFetches).toBe(refs.length);
+		expect(peak).toBeLessThanOrEqual(cap);
+	});
+
+	// Zero is not "no limit". A cap the caller injects is a number sync must
+	// treat as adversarial input like any other, or `maxTotalFetchBytes: 0`
+	// reads as an unbounded budget instead of an impossible one.
+	it("rejects a non-positive injected aggregate cap", async () => {
+		const origin = await originFor(emptyManifest());
+
+		await expect(
+			syncIndex({
+				...origin,
+				baseUrl: "/o",
+				store: new MemoryCacheStore(),
+				verify: passVerify,
+				limits: { maxTotalFetchBytes: 0 },
+			}),
+		).rejects.toThrow(/positive/iu);
+	});
+});
+
+describe("reassembly is verified against the signed whole-file hash", () => {
+	// Every chunk verifies against its own content address and the file still
+	// must not be served: chunk hashes prove the PARTS, `file_sha256` proves
+	// the ORDER and the set. Only the whole-file check can catch a manifest
+	// that reorders or drops valid chunks.
+	it("rejects a reassembled file whose signed whole-file hash differs", async () => {
+		const bytes = ENCODER.encode("verified chunk, wrong file hash");
+		const hash = await sha256Hex(bytes);
+		const zstd = await Zstd.load();
+		const manifest = emptyManifest({
+			files: [
+				{
+					path: "wrong-file-hash.bin",
+					file_type: null,
+					size: bytes.byteLength,
+					file_sha256: "f".repeat(64),
+					chunks: [{ hash, size: bytes.byteLength }],
+				},
+			],
+		});
+		const origin = await originFor(
+			manifest,
+			new Map([[hash, zstd.compress(bytes)]]),
+		);
+
+		await expect(
+			syncIndex({
+				...origin,
+				baseUrl: "/o",
+				store: new MemoryCacheStore(),
+				verify: passVerify,
+			}),
+		).rejects.toThrow(/reassembly/iu);
+	});
+
+	// The manifest is the allow-list. A path it does not name has no signed
+	// hash to check bytes against, so there is no safe way to answer for it.
+	it("rejects materializing a path absent from the verified manifest", async () => {
+		await expect(
+			materializeFile(new MemoryCacheStore(), emptyManifest(), "missing.bin"),
+		).rejects.toThrow(/not in manifest/iu);
 	});
 });

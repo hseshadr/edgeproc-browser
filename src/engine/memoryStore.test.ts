@@ -39,6 +39,24 @@ describe("MemoryCacheStore content-address integrity", () => {
 		expect(await store.hasChunk(wrongHash)).toBe(false);
 	});
 
+	// The hash is right, the frame is genuine, and the SIZE is a lie. That is
+	// the interesting case: the size is what the store allocates against before
+	// it can hash anything, so it is checked on the way IN, not only on the way
+	// out. A store that accepted this would hold a chunk whose signed length
+	// disagrees with its bytes — and then serve it.
+	it("rejects a valid frame whose signed plaintext size is wrong", async () => {
+		const store = new MemoryCacheStore();
+
+		await expect(
+			store.putChunkCompressed(
+				REAL_CHUNK,
+				chunkBytes(REAL_CHUNK),
+				REAL_CHUNK_SIZE - 1,
+			),
+		).rejects.toBeInstanceOf(IntegrityError);
+		expect(await store.hasChunk(REAL_CHUNK)).toBe(false);
+	});
+
 	it("rejects non-zstd bytes (decompress failure is an IntegrityError)", async () => {
 		const store = new MemoryCacheStore();
 		await expect(

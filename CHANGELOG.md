@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A publish preflight that makes a stale `dist/` unpublishable.**
+  `prepublishOnly` now runs `scripts/preflight-publish.mjs` and then the full
+  gate. The script refuses outright — before anything is built or packed — if the
+  tree is dirty, if `HEAD` is on no remote-tracking branch, or if there is no git
+  work tree at all; then it deletes `dist/` so the gate's build cannot reuse a
+  stale object. `files: ["dist"]` means the tarball *is* `dist/`, which is
+  gitignored, so previously `npm publish` shipped whatever the last build left on
+  disk. It nearly shipped exactly that: `dist/engine/client.js` was rebuilt three
+  minutes after `#releaseWorker()` landed and two days after the only commit on
+  `main`, so the compiled output carried a fix no published commit contained.
+  Covered by `test/publish-preflight.test.ts`, which drives every refusal and the
+  accept case against real throwaway repos.
+
+### Fixed
+
+- **CONTRIBUTING claimed things that were not true of this package.** It said
+  coverage was enforced at 100% (`vitest.config.ts` enforces 90/90/90/85) because
+  "the library is pure logic with no I/O" (its subject is OPFS, Workers and
+  BroadcastChannel); it said the package has zero runtime dependencies (it has
+  two); it told you to `cd errors` after cloning; and it listed the gate's steps
+  in the wrong order, hiding that the build runs before the tests on purpose.
+
 ## [0.1.0] - 2026-08-06
 
 First release. The signed-bundle sync substrate of edge-proc, extracted from

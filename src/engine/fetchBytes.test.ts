@@ -25,6 +25,30 @@ describe("fetchBytes release bounds", () => {
 		await assertion;
 	});
 
+	// Headers arriving is not the request finishing. The obvious implementation
+	// clears the deadline once `fetch()` resolves — but `fetch()` resolves on the
+	// RESPONSE HEAD, so a server that sends `200 OK`, one byte, and then nothing
+	// forever leaves the caller hanging with the timer already cleared. The
+	// deadline has to cover the body read, not just the handshake.
+	it("keeps the deadline active after headers while the body stalls", async () => {
+		vi.useFakeTimers();
+		const stalled = new ReadableStream<Uint8Array>({
+			start(controller) {
+				controller.enqueue(new Uint8Array([1]));
+			},
+			pull: () => new Promise<void>(() => undefined),
+		});
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(() => Promise.resolve(new Response(stalled, { status: 200 }))),
+		);
+
+		const pending = fetchBytes("https://origin.example/stalled-body");
+		const assertion = expect(pending).rejects.toBeInstanceOf(NetworkError);
+		await vi.advanceTimersByTimeAsync(FETCH_TIMEOUT_MS);
+		await assertion;
+	});
+
 	it("streams a response through the caller's byte ceiling", async () => {
 		vi.stubGlobal(
 			"fetch",
