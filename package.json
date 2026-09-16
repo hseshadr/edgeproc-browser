@@ -61,7 +61,9 @@
 		"lint": "biome check .",
 		"lint:fix": "biome check --write .",
 		"demo": "pnpm build && node examples/quickstart.mjs",
-		"gate": "pnpm lint && pnpm typecheck && pnpm build && pnpm test"
+		"gate": "pnpm lint && pnpm typecheck && pnpm build && pnpm test",
+		"preflight": "node scripts/preflight-publish.mjs",
+		"prepublishOnly": "pnpm preflight && pnpm gate"
 	},
 	"dependencies": {
 		"@hpcc-js/wasm-zstd": "^1.15.0",

@@ -97,6 +97,25 @@ describe("a Worker that dies never leaves a caller hanging", () => {
 		const error = await client.readFile("a").catch((e: unknown) => e);
 		expect((error as Error).message).toContain("the real cause");
 	});
+
+	// EVERY caller, not just the one that happened to be first in the map — and
+	// the Worker itself is released. An 'error' event is an uncaught throw
+	// INSIDE the Worker, not proof the Worker died: left alone it keeps running,
+	// still holding its OPFS sync access handle, and nothing will ever ask it
+	// for anything again. Rejecting the promises without terminating swaps a
+	// hung caller for a leaked thread.
+	it("rejects EVERY pending call and releases the Worker on a crash", async () => {
+		const fake = fakeWorker();
+		const client = new EngineClient(fake.worker);
+		const first = client.readFile("a");
+		const second = client.sync("https://cdn.example", "/public.key");
+
+		fake.crash("fatal boot");
+
+		await expect(first).rejects.toThrow("fatal boot");
+		await expect(second).rejects.toThrow("fatal boot");
+		expect(fake.terminate).toHaveBeenCalledOnce();
+	});
 });
 
 describe("a Worker that goes silent is bounded by a deadline", () => {
@@ -116,6 +135,27 @@ describe("a Worker that goes silent is bounded by a deadline", () => {
 		expect(DEFAULT_REQUEST_TIMEOUT_MS).toBe(60_000);
 	});
 
+	// A deadline that only settles the CALLER's promise bounds nothing. The
+	// Worker is still running whatever went silent, still holding its handle,
+	// and the next request would be posted into the same silence. Terminating
+	// on the deadline is what makes the bound real rather than cosmetic.
+	it("terminates the silent Worker when the deadline fires", async () => {
+		vi.useFakeTimers();
+		const fake = fakeWorker();
+		const client = new EngineClient(fake.worker, { requestTimeoutMs: 50 });
+		const pending = client.readFile("catalog_meta.json");
+		const assertion =
+			expect(pending).rejects.toBeInstanceOf(WorkerTimeoutError);
+		await vi.advanceTimersByTimeAsync(51);
+		await assertion;
+
+		expect(fake.terminate).toHaveBeenCalledOnce();
+		// And it latches: a request after the deadline must not be posted into
+		// the Worker that was just released.
+		await expect(client.readFile("b")).rejects.toBeInstanceOf(WorkerCrashError);
+		expect(fake.sent).toHaveLength(1);
+	});
+
 	it("does not fire the deadline for a request that already answered", async () => {
 		vi.useFakeTimers();
 		const fake = fakeWorker();
@@ -129,9 +169,23 @@ describe("a Worker that goes silent is bounded by a deadline", () => {
 			bytes: Uint8Array.from([7]),
 		} as EngineResponse);
 		await expect(pending).resolves.toEqual(Uint8Array.from([7]));
-		// If the timer had survived the reply it would reject an already-settled
-		// promise here; an unhandled rejection would surface.
+		// Advancing past the old deadline must leave the Worker alive and the
+		// client usable. A settled promise alone cannot prove timer cleanup:
+		// Promise settlement is idempotent, while the stale callback would still
+		// terminate and latch the Worker.
 		await vi.advanceTimersByTimeAsync(500);
+		expect(fake.terminate).not.toHaveBeenCalled();
+
+		const next = client.readFile("still-alive.json");
+		const nextId = fake.sent[1]?.id ?? 0;
+		fake.reply({
+			ok: true,
+			kind: "readFile",
+			id: nextId,
+			bytes: Uint8Array.from([8]),
+		} as EngineResponse);
+		await expect(next).resolves.toEqual(Uint8Array.from([8]));
+		expect(fake.sent).toHaveLength(2);
 	});
 });
 

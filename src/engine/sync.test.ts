@@ -206,6 +206,31 @@ describe("syncIndex offline fallback to the cached active version", () => {
 		}
 	});
 
+	// The cache is not a trusted tier. Offline is precisely when nothing else
+	// is checking the pointer, and the adversary in a local-first system HOLDS
+	// the machine — so the cached pointer's signature is re-verified on the way
+	// out, not assumed valid because it was valid when it was written. A failed
+	// re-verification also must not evict or rewrite what is there: refusing to
+	// serve is the answer, not destroying the state and re-syncing blind.
+	it("re-verifies the CACHED pointer's signature before serving it offline", async () => {
+		const store = await primedStore();
+		const before = await store.readActive();
+		const rejectsCached: Verify = () =>
+			Promise.reject(new Error("cached pointer signature rejected"));
+
+		await expect(
+			syncIndex({
+				baseUrl: "/cat",
+				store,
+				fetchBytes: () => Promise.reject(new NetworkError("offline")),
+				verify: rejectsCached,
+			}),
+		).rejects.toThrow("cached pointer signature rejected");
+		expect((await store.readActive())?.manifest_hash).toBe(
+			before?.manifest_hash,
+		);
+	});
+
 	it("re-throws when offline AND no active version is cached (cold + offline)", async () => {
 		const store = new MemoryCacheStore();
 		const offlineFetch: FetchBytes = (url) =>

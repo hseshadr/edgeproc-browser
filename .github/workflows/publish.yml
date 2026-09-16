@@ -29,10 +29,10 @@
 #   5. Branch protection LAST, and only while the repo has 0 open PRs — protecting with PRs
 #      open leaves each one BLOCKED with no way to self-approve.
 #
-# Consequence worth stating plainly: 0.1.0 permanently carries NO provenance, and a published
-# version is immutable so it can never be re-published to add it. The first release through
-# this rail should therefore be a PATCH (0.1.1) whose only change IS the provenance — that is
-# what `errors` did, and `^0.1.0` consumers pick it up with no code change.
+# Consequence worth stating plainly: if 0.1.0 is bootstrapped manually, it will permanently
+# carry NO provenance, because a published version is immutable. The first release through
+# this rail should then be a PATCH (0.1.1) whose only change IS the provenance — that is what
+# `errors` did, and `^0.1.0` consumers would pick it up with no code change.
 #
 # Two more npm truths this caller encodes (see ts-publish.yml in hseshadr/ci):
 #   * Re-tagging v0.1.0 just 403s. The next release must carry a HIGHER version.

@@ -6,25 +6,29 @@ Fetch under a byte cap. Verify an ed25519 signature over canonical JSON. Bound a
 
 Zero framework dependencies. Two runtime deps (`@noble/ed25519`, `@hpcc-js/wasm-zstd`). ~2,200 lines.
 
+## TL;DR
+
+- Verify every downloaded byte before use, including bounded zstd expansion.
+- Cache content-addressed chunks locally and reject rollback or equivocation.
+- Observe Worker network activity from the context where it actually happens.
+- **Status:** source preview. `@edgeproc/browser` is not published to npm yet.
+
 ## The problem, in one line
 
 You want to ship data to a browser and have the tab verify it rather than trust the server — and you want to be able to *prove* the tab then stopped talking to the network.
 
 Both halves are harder than they look. The first is a pile of fiddly, security-critical plumbing (canonical bytes, monotonic version pointers, decompression bombs, partial writes) that every local-first app rewrites badly. The second is a trap: **every browsing context keeps its own resource-timing timeline**, so a `PerformanceObserver` on the window sees *nothing* a Worker fetches. A "0 backend calls" counter built the obvious way reads zero exactly when it matters.
 
-## Install
+## Run it locally
 
-```bash
-pnpm add @edgeproc/browser     # Node >= 22.13 for the toolchain; the package itself is browser-only
-```
-
-## Quickstart
-
-A real signed bundle, verified end to end, with no network and no browser:
+A real signed bundle, verified end to end, with no network and no browser. This
+is the supported path until the first npm release:
 
 ```bash
 git clone https://github.com/hseshadr/edgeproc-browser && cd edgeproc-browser
-pnpm install && pnpm demo
+corepack enable
+pnpm install --frozen-lockfile
+pnpm demo
 ```
 
 ```
@@ -46,7 +50,7 @@ pnpm install && pnpm demo
 
 That is [`examples/quickstart.mjs`](./examples/quickstart.mjs), running against the real signed bundle committed in this repo. The transport is injected, so "no network" is structural rather than asserted.
 
-In an app:
+The planned package API looks like this after the package is published:
 
 ```ts
 import { EngineClient, installNetworkSentinel } from "@edgeproc/browser";
@@ -109,7 +113,7 @@ Stated plainly, because an unstated gap is a lie by omission:
 
 - **`opfsStore.ts` is not covered by this package's test suite** (57% of statements, and excluded from the coverage gate). jsdom has no OPFS implementation, so sync-access-handle contention, the nav-release race, and partial-write recovery are **unproven here**. They are exercised downstream against a real browser. This package needs its own real-browser tier before that module can carry a coverage claim.
 - **`worker.ts` is excluded too**, for a different reason: it is a top-level side effect, so importing it under jsdom would run it, not test it.
-- Everything else clears the project floor — 92.8% statements, 86.2% branches, 99.0% functions, 93.8% lines.
+- Everything else clears the project floor — 95.92% statements, 92.40% branches, 100% functions, 96.64% lines.
 
 ## Consuming this package
 
@@ -123,7 +127,7 @@ Explore the [interactive runtime map](docs/architecture/index.html).
 
 ## Provenance
 
-This code was extracted from [edge-reco](https://github.com/hseshadr/edge-reco), where it had been running in production, rather than written fresh. The extraction is verifiable: **13 of its 14 modules differ from their origin only in import specifiers** (`./x` → `./x.js`, required for spec-correct ESM). The single substantive change is in `EngineClient.spawn()`, which now names `./worker.js` — the file as it exists in the published artefact — and is guarded by `test/dist-contract.test.ts` against real build output.
+This code was extracted from [edge-reco](https://github.com/hseshadr/edge-reco), where it had been running in production, rather than written fresh. The extraction is verifiable: **13 of its 14 modules differ from their origin only in import specifiers** (`./x` → `./x.js`, required for spec-correct ESM). The single substantive change is in `EngineClient.spawn()`, which now names `./worker.js` — the file as it exists in the package artefact — and is guarded by `test/dist-contract.test.ts` against real build output.
 
 `engine/crypto.ts` is byte-identical (`md5 864f84b8bed8660362489cf92d934e06`) to the copy shipping in all three consumer repos today.
 
