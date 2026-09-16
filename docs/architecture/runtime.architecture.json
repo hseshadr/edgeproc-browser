@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "EdgeProc Browser: Verifiable Bytes in a Worker",
+    "locale": "en",
+    "quality_profile": "showcase",
+    "viewBox": [1380, 650],
+    "repository": {
+      "url": "https://github.com/hseshadr/edgeproc-browser",
+      "revision": "ac2ed8782734949479c9937ebb8f51a916c572f8"
+    },
+    "views": [
+      {"id": "sync-path", "label": "Signed sync", "focus": ["app", "client", "worker", "sync", "opfs"], "note": "Follow a typed request into the Worker, through fail-closed verification, and into the active browser snapshot."},
+      {"id": "read-path", "label": "Verified read", "focus": ["client", "worker", "opfs", "bytes"], "note": "Only reassembled bytes that still match the signed manifest cross back to the application."},
+      {"id": "network-proof", "label": "Network proof", "focus": ["worker", "sentinel"], "note": "The Worker reports its own resource timeline so zero-egress claims can be measured from the main thread."}
+    ]
+  },
+  "components": [
+    {"id": "app", "type": "external", "label": "Browser Application", "sublabel": "sync + readFile calls", "pos": [20, 155], "size": [170, 72], "sources": [{"path": "README.md", "line": 47, "end_line": 60, "label": "consumer API"}]},
+    {"id": "client", "type": "frontend", "label": "EngineClient", "sublabel": "typed RPC + deadlines", "pos": [250, 155], "size": [170, 72], "sources": [{"path": "src/engine/client.ts", "line": 45, "end_line": 108, "label": "client boundary"}, {"path": "src/engine/client.ts", "line": 148, "end_line": 183, "label": "fault handling"}]},
+    {"id": "worker", "type": "backend", "label": "Module Worker", "sublabel": "owns browser-only handles", "pos": [480, 155], "size": [170, 72], "sources": [{"path": "src/engine/worker.ts", "line": 22, "end_line": 60, "label": "Worker engine"}, {"path": "src/engine/worker.ts", "line": 75, "end_line": 98, "label": "typed request loop"}]},
+    {"id": "sync", "type": "security", "label": "Sync Verifier", "sublabel": "caps + signatures + hashes", "pos": [710, 155], "size": [170, 72], "sources": [{"path": "src/engine/sync.ts", "line": 588, "end_line": 624, "label": "sync state machine"}, {"path": "src/engine/crypto.ts", "line": 76, "end_line": 100, "label": "Ed25519 verification"}]},
+    {"id": "opfs", "type": "database", "label": "OPFS Snapshot", "sublabel": "content-addressed + durable", "pos": [940, 155], "size": [170, 72], "sources": [{"path": "src/engine/opfsStore.ts", "line": 84, "end_line": 107, "label": "browser store"}, {"path": "src/engine/opfsStore.ts", "line": 189, "end_line": 218, "label": "atomic promotion"}]},
+    {"id": "bytes", "type": "external", "label": "Verified File Bytes", "sublabel": "reassembled on demand", "pos": [1170, 155], "size": [170, 72], "sources": [{"path": "src/engine/sync.ts", "line": 632, "end_line": 638, "label": "materialize boundary"}, {"path": "src/engine/worker.ts", "line": 57, "end_line": 60, "label": "read response"}]},
+    {"id": "sentinel", "type": "backend", "label": "Network Sentinel", "sublabel": "Worker resource timeline", "pos": [480, 500], "size": [170, 72], "sources": [{"path": "src/engine/networkSentinel.ts", "line": 101, "end_line": 134, "label": "cross-context reports"}]}
+  ],
+  "connections": [
+    {"id": "call", "from": "app", "to": "client", "label": "call API", "variant": "emphasis", "labelAt": [220, 120]},
+    {"id": "rpc", "from": "client", "to": "worker", "label": "postMessage", "variant": "emphasis", "labelAt": [450, 120]},
+    {"id": "verify", "from": "worker", "to": "sync", "label": "sync request", "variant": "security", "labelAt": [680, 120]},
+    {"id": "promote", "from": "sync", "to": "opfs", "label": "promote", "variant": "security", "labelAt": [910, 120]},
+    {"id": "read", "from": "opfs", "to": "bytes", "label": "reassemble", "variant": "emphasis", "labelAt": [1140, 120]},
+    {"id": "observe", "from": "worker", "to": "sentinel", "label": "report fetches", "variant": "dashed", "fromSide": "bottom", "toSide": "top", "route": "straight", "labelAt": [565, 365]}
+  ],
+  "cards": [
+    {"dot": "rose", "title": "Fail closed", "items": ["Unverifiable bytes are rejected, never degraded", "Rollback and resource limits are enforced before promotion"]},
+    {"dot": "cyan", "title": "Worker boundary", "items": ["OPFS sync handles stay off the main thread", "Typed replies turn crashes and silence into explicit failures"]},
+    {"dot": "emerald", "title": "Measured privacy", "items": ["Each Worker observes its own network timeline", "Epoch timestamps make reports comparable across contexts"]}
+  ]
+}
