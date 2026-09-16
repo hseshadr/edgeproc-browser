@@ -117,6 +117,10 @@ It builds to ESM with fully-specified relative imports, so it works in Node and 
 
 `EngineClient.spawn()` constructs the Worker from `new URL("./worker.js", import.meta.url)`. Bundlers need that literal to stay statically analyzable; do not wrap it.
 
+## Architecture
+
+Explore the [interactive runtime map](docs/architecture/index.html).
+
 ## Provenance
 
 This code was extracted from [edge-reco](https://github.com/hseshadr/edge-reco), where it had been running in production, rather than written fresh. The extraction is verifiable: **13 of its 14 modules differ from their origin only in import specifiers** (`./x` → `./x.js`, required for spec-correct ESM). The single substantive change is in `EngineClient.spawn()`, which now names `./worker.js` — the file as it exists in the published artefact — and is guarded by `test/dist-contract.test.ts` against real build output.
