@@ -607,6 +607,66 @@ describe("bounded sync resources", () => {
 		expect(await store.readActive()).toBeNull();
 	});
 
+	it("rejects distinct responses that exceed the aggregate cap cumulatively", async () => {
+		const zstd = await Zstd.load();
+		const chunks = new Map<string, Uint8Array>();
+		const refs: { hash: string; size: number }[] = [];
+		const plaintexts: Uint8Array[] = [];
+		for (let seed = 1; seed <= 3; seed += 1) {
+			let state = seed;
+			const bytes = Uint8Array.from({ length: 1024 }, () => {
+				state = (state * 1664525 + 1013904223) >>> 0;
+				return state & 0xff;
+			});
+			const hash = await sha256Hex(bytes);
+			const compressed = zstd.compress(bytes);
+			plaintexts.push(bytes);
+			refs.push({ hash, size: bytes.byteLength });
+			chunks.set(hash, compressed);
+		}
+		const compressedSizes = [...chunks.values()].map(
+			(chunk) => chunk.byteLength,
+		);
+		const cap = Math.max(...compressedSizes) + 1;
+		expect(compressedSizes.every((size) => size < cap)).toBe(true);
+		expect(
+			compressedSizes.reduce((sum, size) => sum + size, 0),
+		).toBeGreaterThan(cap);
+		const fileBytes = new Uint8Array(
+			plaintexts.reduce((sum, bytes) => sum + bytes.byteLength, 0),
+		);
+		let offset = 0;
+		for (const bytes of plaintexts) {
+			fileBytes.set(bytes, offset);
+			offset += bytes.byteLength;
+		}
+		const manifest = emptyManifest({
+			files: [
+				{
+					path: "cumulative.bin",
+					file_type: null,
+					size: fileBytes.byteLength,
+					file_sha256: await sha256Hex(fileBytes),
+					chunks: refs,
+				},
+			],
+		});
+		const origin = await originFor(manifest, chunks);
+		const store = new MemoryCacheStore();
+
+		await expect(
+			syncIndex({
+				...origin,
+				baseUrl: "/o",
+				store,
+				verify: passVerify,
+				limits: { maxTotalFetchBytes: cap },
+			}),
+		).rejects.toThrow(/aggregate/iu);
+		expect(origin.requestCount()).toBeGreaterThan(3);
+		expect(await store.readActive()).toBeNull();
+	});
+
 	it("bounds zstd output by the signed chunk size", async () => {
 		const zstd = await Zstd.load();
 		const bomb = new Uint8Array(9 * 1024 * 1024);

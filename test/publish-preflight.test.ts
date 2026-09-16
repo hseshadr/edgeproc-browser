@@ -44,6 +44,14 @@ function git(dir: string, ...args: readonly string[]): void {
 	execFileSync("git", args, { cwd: dir, stdio: "ignore" });
 }
 
+function gitOutput(dir: string, ...args: readonly string[]): string {
+	return execFileSync("git", args, {
+		cwd: dir,
+		encoding: "utf8",
+		stdio: ["ignore", "pipe", "pipe"],
+	}).trim();
+}
+
 /**
  * A repo shaped like this one: `dist` gitignored, one commit, clean tree. The
  * local identity and unsigned commits are forced so a contributor's global git
@@ -64,6 +72,39 @@ function repoWithOneCommit(): string {
 /** Marks HEAD as present on a remote, without needing one to exist. */
 function markPushed(dir: string): void {
 	git(dir, "update-ref", "refs/remotes/origin/main", "HEAD");
+}
+
+function bareRemote(): string {
+	const dir = scratchDir();
+	git(dir, "init", "-q", "--bare");
+	return dir;
+}
+
+function shallowTagCheckout(kind: "lightweight" | "annotated"): string {
+	const source = repoWithOneCommit();
+	const remote = bareRemote();
+	git(source, "remote", "add", "origin", remote);
+	if (kind === "annotated") {
+		git(source, "tag", "-a", "v0.1.0", "-m", "release v0.1.0");
+	} else {
+		git(source, "tag", "v0.1.0");
+	}
+	git(source, "push", "-q", "origin", "refs/tags/v0.1.0");
+
+	const checkout = scratchDir();
+	git(checkout, "init", "-q");
+	git(checkout, "remote", "add", "origin", remote);
+	git(
+		checkout,
+		"fetch",
+		"-q",
+		"--depth=1",
+		"origin",
+		"refs/tags/v0.1.0:refs/tags/v0.1.0",
+	);
+	git(checkout, "checkout", "-q", "--detach", "refs/tags/v0.1.0");
+	expect(gitOutput(checkout, "branch", "--remotes")).toBe("");
+	return checkout;
 }
 
 /** A dist/ that a real stale-build publish would have shipped verbatim. */
@@ -114,6 +155,88 @@ describe("publish preflight", () => {
 		expect(status).toBe(1);
 		expect(output).toMatch(/on no remote-tracking branch/);
 	});
+
+	it("refuses a local-only tag that origin cannot reproduce", () => {
+		const dir = repoWithOneCommit();
+		git(dir, "remote", "add", "origin", bareRemote());
+		git(dir, "tag", "v0.1.0");
+		const stale = staleDist(dir);
+
+		const { status, output } = runPreflight(dir);
+
+		expect(status).toBe(1);
+		expect(output).toMatch(/no exact local tag published unchanged to origin/);
+		expect(existsSync(stale)).toBe(true);
+	});
+
+	it("fails closed when origin cannot be queried", () => {
+		const dir = repoWithOneCommit();
+		git(dir, "remote", "add", "origin", join(dir, "missing-origin.git"));
+		git(dir, "tag", "v0.1.0");
+		const stale = staleDist(dir);
+
+		const { status, output } = runPreflight(dir);
+
+		expect(status).toBe(1);
+		expect(output).toMatch(/no exact local tag published unchanged to origin/);
+		expect(existsSync(stale)).toBe(true);
+	});
+
+	it("refuses a same-name origin tag that identifies another commit", () => {
+		const remoteSource = repoWithOneCommit();
+		writeFileSync(join(remoteSource, "remote-only"), "different commit\n");
+		git(remoteSource, "add", ".");
+		git(remoteSource, "commit", "-q", "-m", "remote release");
+		git(remoteSource, "tag", "v0.1.0");
+		const remote = bareRemote();
+		git(remoteSource, "remote", "add", "origin", remote);
+		git(remoteSource, "push", "-q", "origin", "refs/tags/v0.1.0");
+
+		const dir = repoWithOneCommit();
+		git(dir, "remote", "add", "origin", remote);
+		git(dir, "tag", "v0.1.0");
+
+		const { status, output } = runPreflight(dir);
+
+		expect(status).toBe(1);
+		expect(output).toMatch(/no exact local tag published unchanged to origin/);
+	});
+
+	it("refuses a rewritten annotated tag even when its commit is unchanged", () => {
+		const dir = repoWithOneCommit();
+		const remote = bareRemote();
+		git(dir, "remote", "add", "origin", remote);
+		git(dir, "tag", "-a", "v0.1.0", "-m", "published annotation");
+		git(dir, "push", "-q", "origin", "refs/tags/v0.1.0");
+		git(
+			dir,
+			"tag",
+			"-f",
+			"-a",
+			"v0.1.0",
+			"-m",
+			"local rewrite of the same commit",
+		);
+
+		const { status, output } = runPreflight(dir);
+
+		expect(status).toBe(1);
+		expect(output).toMatch(/no exact local tag published unchanged to origin/);
+	});
+
+	it.each(["lightweight", "annotated"] as const)(
+		"accepts an Actions-like shallow checkout of a published %s tag",
+		(kind) => {
+			const dir = shallowTagCheckout(kind);
+			const stale = staleDist(dir);
+
+			const { status, output } = runPreflight(dir);
+
+			expect(status).toBe(0);
+			expect(output).toMatch(/preflight OK/);
+			expect(existsSync(stale)).toBe(false);
+		},
+	);
 
 	it("accepts a clean pushed commit, and empties dist so the build is from scratch", () => {
 		const dir = repoWithOneCommit();

@@ -169,9 +169,23 @@ describe("a Worker that goes silent is bounded by a deadline", () => {
 			bytes: Uint8Array.from([7]),
 		} as EngineResponse);
 		await expect(pending).resolves.toEqual(Uint8Array.from([7]));
-		// If the timer had survived the reply it would reject an already-settled
-		// promise here; an unhandled rejection would surface.
+		// Advancing past the old deadline must leave the Worker alive and the
+		// client usable. A settled promise alone cannot prove timer cleanup:
+		// Promise settlement is idempotent, while the stale callback would still
+		// terminate and latch the Worker.
 		await vi.advanceTimersByTimeAsync(500);
+		expect(fake.terminate).not.toHaveBeenCalled();
+
+		const next = client.readFile("still-alive.json");
+		const nextId = fake.sent[1]?.id ?? 0;
+		fake.reply({
+			ok: true,
+			kind: "readFile",
+			id: nextId,
+			bytes: Uint8Array.from([8]),
+		} as EngineResponse);
+		await expect(next).resolves.toEqual(Uint8Array.from([8]));
+		expect(fake.sent).toHaveLength(2);
 	});
 });
 

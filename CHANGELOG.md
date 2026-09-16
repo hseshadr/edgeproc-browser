@@ -12,9 +12,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A publish preflight that makes a stale `dist/` unpublishable.**
   `prepublishOnly` now runs `scripts/preflight-publish.mjs` and then the full
   gate. The script refuses outright — before anything is built or packed — if the
-  tree is dirty, if `HEAD` is on no remote-tracking branch, or if there is no git
-  work tree at all; then it deletes `dist/` so the gate's build cannot reuse a
-  stale object. `files: ["dist"]` means the tarball *is* `dist/`, which is
+  tree is dirty, if `HEAD` is neither on a remote-tracking branch nor at an exact
+  local tag published unchanged to `origin`, or if there is no git work tree at
+  all; then it deletes `dist/` so the gate's build cannot reuse a stale object.
+  This covers both normal branch builds and GitHub Actions' shallow detached-tag
+  checkout without trusting a local-only or moved tag. `files: ["dist"]` means
+  the tarball *is* `dist/`, which is
   gitignored, so previously `npm publish` shipped whatever the last build left on
   disk. It nearly shipped exactly that: `dist/engine/client.js` was rebuilt three
   minutes after `#releaseWorker()` landed and two days after the only commit on
@@ -31,11 +34,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   two); it told you to `cd errors` after cloning; and it listed the gate's steps
   in the wrong order, hiding that the build runs before the tests on purpose.
 
-## [0.1.0] - 2026-08-06
+## Planned 0.1.0 (not yet published)
 
-First release. The signed-bundle sync substrate of edge-proc, extracted from
+This is the planned first release; npm and GitHub do not yet carry a 0.1.0
+package, tag, or release. The signed-bundle sync substrate of edge-proc was extracted from
 [edge-reco](https://github.com/hseshadr/edge-reco) — where it had been running in
-production — and published so its three consumers stop each carrying their own copy.
+production — so its three consumers can stop each carrying their own copy after
+publication.
 
 ### Added
 
@@ -85,15 +90,16 @@ production — and published so its three consumers stop each carrying their own
   (57% of statements). jsdom has no OPFS, so sync-access-handle contention, the
   nav-release race, and partial-write recovery are unproven by this suite. A
   real-browser tier is required before that module can carry a coverage claim.
-- `0.1.0` carries **no npm provenance**. npm has no "pending publisher" state — a
-  trusted publisher attaches to an existing package — so the first publish of a new
-  name must be manual, and a published version is immutable. The next release will
-  be a patch whose only change *is* the provenance.
+- The first `0.1.0` publish would carry **no npm provenance**. npm has no
+  "pending publisher" state — a trusted publisher attaches to an existing
+  package — so the first publish of a new name must be manual, and a published
+  version is immutable. If 0.1.0 is bootstrapped this way, the next release must
+  be a provenance-bearing patch.
 
 ### Evidence
 
-- Gate green: 16 test files, 154 tests. Coverage 92.83% statements /
-  86.23% branches / 99.04% functions / 93.77% lines.
+- Gate green: 17 test files, 192 tests. Coverage 95.92% statements /
+  92.40% branches / 100% functions / 96.64% lines.
 - The `networkSentinel` guard was watched failing, not merely watched passing.
   Four mutations, each verified applied by md5 before its result was trusted and
   each judged on the vitest **exit code** rather than grepped output: dropping the
@@ -101,6 +107,3 @@ production — and published so its three consumers stop each carrying their own
   unconditionally (1), accepting entries of any field type (1), and observing
   without `buffered: true` (1). All four went red; the unmutated control was green;
   the file was restored byte-identical.
-
-[Unreleased]: https://github.com/hseshadr/edgeproc-browser/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/hseshadr/edgeproc-browser/releases/tag/v0.1.0

@@ -15,8 +15,8 @@
 //
 //   1. Not a git work tree      — there is no commit to be the source of truth.
 //   2. Dirty tree               — the build's inputs are not any commit's contents.
-//   3. HEAD on no remote        — the commit exists only on this machine, so no
-//                                 consumer can ever reproduce the tarball.
+//   3. HEAD not proven remote   — the commit is neither on a remote-tracking
+//                                 branch nor the exact target of a tag on origin.
 //
 // Then it DELETES dist/, so the `pnpm gate` that follows cannot reuse a stale
 // object. tsc's outDir is additive: it overwrites what it re-emits and leaves
@@ -54,6 +54,73 @@ function gitOrNull(...args) {
 	}
 }
 
+/** A bounded, non-interactive remote query. Any failure means "not proven". */
+function gitRemoteOrNull(...args) {
+	try {
+		return execFileSync("git", args, {
+			cwd: ROOT,
+			encoding: "utf8",
+			env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+			stdio: ["ignore", "pipe", "pipe"],
+			timeout: 15_000,
+		}).trim();
+	} catch {
+		return null;
+	}
+}
+
+function lines(output) {
+	return output === "" ? [] : output.split("\n");
+}
+
+function remoteRefs(output) {
+	const refs = new Map();
+	for (const line of lines(output)) {
+		const [object, ref, extra] = line.split("\t");
+		if (
+			extra !== undefined ||
+			object === undefined ||
+			!/^[0-9a-f]{40,64}$/.test(object) ||
+			ref === undefined ||
+			refs.has(ref)
+		) {
+			return null;
+		}
+		refs.set(ref, object);
+	}
+	return refs;
+}
+
+function exactTagIsPublished(head) {
+	const tagOutput = gitOrNull("tag", "--points-at", head);
+	if (tagOutput === null) return false;
+	const tags = lines(tagOutput);
+	if (tags.length === 0) return false;
+	const patterns = tags.flatMap((tag) => [
+		`refs/tags/${tag}`,
+		`refs/tags/${tag}^{}`,
+	]);
+	const advertised = gitRemoteOrNull(
+		"ls-remote",
+		"--exit-code",
+		"--tags",
+		"origin",
+		...patterns,
+	);
+	if (advertised === null) return false;
+	const refs = remoteRefs(advertised);
+	if (refs === null) return false;
+	for (const tag of tags) {
+		const ref = `refs/tags/${tag}`;
+		const localObject = gitOrNull("rev-parse", "--verify", ref);
+		const localCommit = gitOrNull("rev-parse", "--verify", `${ref}^{commit}`);
+		if (localObject === null || localCommit !== head) return false;
+		if (refs.get(ref) !== localObject) continue;
+		if (localObject === head || refs.get(`${ref}^{}`) === head) return true;
+	}
+	return false;
+}
+
 /** Every refusal exits 1 and says what to do about it. npm aborts the publish. */
 function refuse(reason, fix) {
 	process.stderr.write(`\nREFUSING TO PUBLISH: ${reason}\n\n  ${fix}\n\n`);
@@ -83,10 +150,14 @@ if (head === null) {
 	);
 }
 
-if (gitOrNull("branch", "--remotes", "--contains", head) === "") {
+const remoteBranches = gitOrNull("branch", "--remotes", "--contains", head);
+if (
+	remoteBranches === null ||
+	(remoteBranches === "" && !exactTagIsPublished(head))
+) {
 	refuse(
-		`HEAD (${head}) is on no remote-tracking branch, so it exists only on this machine and nobody can reproduce this tarball.`,
-		"Push the commit (and `git fetch` if the push was made elsewhere), then publish.",
+		`HEAD (${head}) is on no remote-tracking branch and has no exact local tag published unchanged to origin, so nobody can reproduce this tarball.`,
+		"Push the commit or its exact release tag (and `git fetch` if it was pushed elsewhere), then publish.",
 	);
 }
 
