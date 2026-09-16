@@ -70,9 +70,9 @@
 	"devDependencies": {
 		"@biomejs/biome": "^2.5.5",
 		"@types/node": "^26.1.2",
-		"@vitest/coverage-v8": "^4.1.10",
+		"@vitest/coverage-v8": "^4.1.11",
 		"jsdom": "^30.0.0",
 		"typescript": "~7.0.2",
-		"vitest": "^4.1.10"
+		"vitest": "^4.1.11"
 	}
 }
