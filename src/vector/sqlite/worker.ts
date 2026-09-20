@@ -1,12 +1,12 @@
 /// <reference lib="webworker" />
 
 import sqlite3InitModule from "./assets/sqlite3.mjs";
-import { type SqliteDatabase, SqliteDatabaseVectorIndex } from "./database";
+import { type SqliteDatabase, SqliteDatabaseVectorIndex } from "./database.js";
 import type {
 	SqliteVectorWorkerOptions,
 	SqliteVectorWorkerRequest,
 	SqliteVectorWorkerResponse,
-} from "./protocol";
+} from "./protocol.js";
 
 interface RawDatabase {
 	exec(options: { sql: string; bind?: unknown[] }): unknown;

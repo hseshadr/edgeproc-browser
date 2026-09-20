@@ -17,10 +17,11 @@
 //   2. Every path in package.json `exports` points at a file that exists.
 //
 // This is why the gate runs `build` BEFORE `test`.
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -143,6 +144,27 @@ describe("published artefact contract", () => {
 		for (const target of targets) {
 			const onDisk = join(ROOT, target);
 			expect(existsSync(onDisk), `exports -> ${target} is missing`).toBe(true);
+		}
+	});
+
+	it("loads every side-effect-free JavaScript export with native ESM", async () => {
+		for (const target of [
+			"dist/index.js",
+			"dist/engine/spawn.js",
+			"dist/vector/index.js",
+			"dist/vector/sqlite/index.js",
+		]) {
+			const url = pathToFileURL(join(ROOT, target)).href;
+			const result = spawnSync(
+				process.execPath,
+				[
+					"--input-type=module",
+					"--eval",
+					`await import(${JSON.stringify(url)})`,
+				],
+				{ encoding: "utf8" },
+			);
+			expect(result.status, `${target}: ${result.stderr}`).toBe(0);
 		}
 	});
 

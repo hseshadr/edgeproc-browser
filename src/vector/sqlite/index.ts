@@ -3,14 +3,14 @@ export {
 	SqliteVectorIndexClient,
 	type SqliteVectorWorkerFactory,
 	type SqliteWorkerVectorIndex,
-} from "./client";
+} from "./client.js";
 export {
 	type SqliteDatabase,
 	SqliteDatabaseVectorIndex,
 	type SqliteValue,
 	type SqliteVectorRuntimeInfo,
-} from "./database";
+} from "./database.js";
 export type {
 	SqliteVectorPersistence,
 	SqliteVectorWorkerOptions,
-} from "./protocol";
+} from "./protocol.js";

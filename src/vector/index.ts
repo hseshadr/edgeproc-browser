@@ -1,5 +1,5 @@
-export { assertVectorIndexConformance } from "./conformance";
-export { FlatVectorIndex } from "./flat";
+export { assertVectorIndexConformance } from "./conformance.js";
+export { FlatVectorIndex } from "./flat.js";
 export { type PackedVectorHit, PackedVectorIndex } from "./packed.js";
 export type {
 	Metadata,
@@ -12,4 +12,4 @@ export type {
 	VectorIndexOptions,
 	VectorRecord,
 	VectorStats,
-} from "./types";
+} from "./types.js";

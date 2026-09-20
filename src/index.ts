@@ -97,6 +97,7 @@ export type {
 } from "./engine/protocol.js";
 // --- the sync state machine + file reassembly ---
 export {
+	MAX_CHUNK_RETRY_BUDGET_MS,
 	materializeFile,
 	RollbackError,
 	type SyncArgs,

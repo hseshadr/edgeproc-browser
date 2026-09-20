@@ -1,0 +1,1 @@
+{"version":3,"file":"storageError.d.ts","sourceRoot":"","sources":["../../src/engine/storageError.ts"],"names":[],"mappings":"AAAA,kFAAkF;AAClF,qBAAa,iBAAkB,SAAQ,KAAK;IAC3C,YACC,OAAO,SAAoC,EAC3C,OAAO,CAAC,EAAE,YAAY,EAItB;CACD;AAED,wBAAgB,YAAY,CAAC,KAAK,EAAE,OAAO,GAAG,OAAO,CAUpD;AAED,wBAAgB,qBAAqB,CAAC,KAAK,EAAE,OAAO,GAAG,KAAK,CAM3D"}

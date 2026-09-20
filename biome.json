@@ -9,6 +9,7 @@
 		"ignoreUnknown": false,
 		"includes": [
 			"**",
+			"!dist",
 			"!**/coverage",
 			"!docs/architecture",
 			"!src/vector/sqlite/assets/sqlite3.mjs",

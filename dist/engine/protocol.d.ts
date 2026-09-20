@@ -1,0 +1,63 @@
+import type { EngineErrorDetail } from "./engineError.js";
+import type { IndexedDbLayoutOptions } from "./indexedDbStore.js";
+import type { SyncProgress } from "./sync.js";
+import type { EngineSyncResult, StoragePreference } from "./types.js";
+/** Sync the signed bundle at `baseUrl`, pinning the raw pubkey at `pubkeyUrl`. */
+export interface SyncRequest {
+    readonly kind: "sync";
+    readonly id: number;
+    readonly baseUrl: string;
+    readonly pubkeyUrl: string;
+    readonly expectedBundleId?: string | null;
+    readonly expectedChannel?: string | null;
+    readonly wantedPaths?: ReadonlyArray<string>;
+    readonly storageBackend?: StoragePreference;
+    readonly cacheNamespace?: string;
+    readonly indexedDbLayout?: IndexedDbLayoutOptions;
+}
+/** Materialize a synced file's bytes from the active manifest. */
+export interface ReadFileRequest {
+    readonly kind: "readFile";
+    readonly id: number;
+    readonly path: string;
+}
+/** Clear the configured durable cache under the same cross-tab lock as sync/read. */
+export interface ClearRequest {
+    readonly kind: "clear";
+    readonly id: number;
+    readonly storageBackend?: StoragePreference;
+    readonly cacheNamespace?: string;
+    readonly indexedDbLayout?: IndexedDbLayoutOptions;
+}
+export type EngineRequest = SyncRequest | ReadFileRequest | ClearRequest;
+export interface SyncOk {
+    readonly ok: true;
+    readonly id: number;
+    readonly kind: "sync";
+    readonly result: EngineSyncResult;
+}
+export interface SyncProgressResponse {
+    readonly ok: true;
+    readonly id: number;
+    readonly kind: "syncProgress";
+    readonly progress: SyncProgress;
+}
+export interface ReadFileOk {
+    readonly ok: true;
+    readonly id: number;
+    readonly kind: "readFile";
+    readonly bytes: Uint8Array;
+}
+export interface ClearOk {
+    readonly ok: true;
+    readonly id: number;
+    readonly kind: "clear";
+}
+export interface EngineErr {
+    readonly ok: false;
+    readonly id: number;
+    readonly kind: EngineRequest["kind"];
+    readonly error: EngineErrorDetail;
+}
+export type EngineResponse = SyncOk | SyncProgressResponse | ReadFileOk | ClearOk | EngineErr;
+//# sourceMappingURL=protocol.d.ts.map

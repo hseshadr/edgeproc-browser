@@ -53,7 +53,7 @@ function gitOutput(dir: string, ...args: readonly string[]): string {
 }
 
 /**
- * A repo shaped like this one: `dist` gitignored, one commit, clean tree. The
+ * A minimal repo with disposable build output, one commit, and a clean tree. The
  * local identity and unsigned commits are forced so a contributor's global git
  * config cannot decide whether this suite passes.
  */
