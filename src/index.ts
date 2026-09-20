@@ -23,11 +23,18 @@ export { canonicalBytes, type JsonValue } from "./engine/canonical.js";
 export {
 	EngineClient,
 	type EngineClientOptions,
+	type EngineStorageOptions,
+	type EngineSyncOptions,
 	type EngineWorkerLike,
 } from "./engine/client.js";
-
 // --- ed25519 + sha256: the primitives the whole chain rests on ---
 export { SignatureError, sha256Hex, verifyEd25519 } from "./engine/crypto.js";
+export {
+	classifyEngineError,
+	type EngineErrorCode,
+	type EngineErrorDetail,
+	EngineOperationError,
+} from "./engine/engineError.js";
 // --- the network edge: size-capped, timeout-bounded byte fetch ---
 export {
 	DEFAULT_MAX_FETCH_BYTES,
@@ -36,6 +43,12 @@ export {
 	NetworkError,
 	ResponseTooLargeError,
 } from "./engine/fetchBytes.js";
+export {
+	IndexedDbCacheStore,
+	type IndexedDbLayout,
+	type IndexedDbLayoutOptions,
+	resolveIndexedDbLayout,
+} from "./engine/indexedDbStore.js";
 // --- integrity: bounded decompression + content-address verification ---
 export {
 	decompressAndVerify,
@@ -63,28 +76,45 @@ export {
 	OpfsCacheStore,
 	selectHighestPointer,
 } from "./engine/opfsStore.js";
+export {
+	openPersistentCacheStore,
+	type PersistentCacheStore,
+	type PersistentStoreOptions,
+	requestPersistentStorage,
+} from "./engine/persistentStore.js";
 // --- the Worker boundary: request/response protocol + the main-thread client ---
 export type {
+	ClearOk,
+	ClearRequest,
+	EngineErr,
 	EngineRequest,
 	EngineResponse,
+	ReadFileOk,
 	ReadFileRequest,
+	SyncOk,
+	SyncProgressResponse,
 	SyncRequest,
 } from "./engine/protocol.js";
 // --- the sync state machine + file reassembly ---
 export {
 	materializeFile,
 	RollbackError,
+	type SyncArgs,
 	SyncCapError,
+	type SyncProgress,
 	syncIndex,
 } from "./engine/sync.js";
 // --- the wire + seam contracts (single source of truth) ---
 export type {
+	CacheBackend,
 	CacheStore,
 	ChunkRef,
+	EngineSyncResult,
 	FetchBytes,
 	FetchBytesOptions,
 	FileEntry,
 	IndexManifest,
+	StoragePreference,
 	SyncResult,
 	Verify,
 	VersionPointer,

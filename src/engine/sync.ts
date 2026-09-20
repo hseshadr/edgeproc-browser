@@ -2,9 +2,10 @@
 // bounded before allocation/fetch, and promotion remains the final operation.
 
 import { canonicalBytes, type JsonValue } from "./canonical.js";
-import { sha256Hex } from "./crypto.js";
+import { SignatureError, sha256Hex } from "./crypto.js";
 import { NetworkError } from "./fetchBytes.js";
 import { IntegrityError, MAX_DECOMPRESSED_CHUNK_BYTES } from "./integrity.js";
+import { isQuotaError } from "./storageError.js";
 import type {
 	CacheStore,
 	ChunkRef,
@@ -17,13 +18,34 @@ import type {
 	VersionPointer,
 } from "./types.js";
 
-interface SyncArgs {
+export type SyncProgress =
+	| { readonly phase: "pointer"; readonly version: string }
+	| {
+			readonly phase: "manifest";
+			readonly totalFiles: number;
+			readonly selectedFiles: number;
+	  }
+	| {
+			readonly phase: "chunks";
+			readonly fetchedChunks: number;
+			readonly totalChunks: number;
+			readonly bytesFetched: number;
+	  }
+	| { readonly phase: "promoted"; readonly result: SyncResult };
+
+export interface SyncArgs {
 	readonly baseUrl: string;
 	readonly store: CacheStore;
 	readonly fetchBytes: FetchBytes;
 	readonly verify: Verify;
-	readonly expectedBundleId?: string;
-	readonly expectedChannel?: string;
+	/** undefined skips the check; null requires a legacy absent/null identity. */
+	readonly expectedBundleId?: string | null;
+	/** undefined skips the check; null requires a legacy absent/null channel. */
+	readonly expectedChannel?: string | null;
+	/** undefined fetches all file chunks; [] authenticates/promotes the catalog only. */
+	readonly wantedPaths?: ReadonlyArray<string>;
+	/** Observer only: exceptions are isolated from the integrity state machine. */
+	readonly onProgress?: (progress: SyncProgress) => void;
 	/** Tests/operators may only LOWER the aggregate cap, never raise the release
 	 * ceiling. This keeps failure paths cheap to exercise without weakening prod. */
 	readonly limits?: { readonly maxTotalFetchBytes?: number };
@@ -94,7 +116,10 @@ function assertBoundedInteger(
 	}
 }
 
-function assertVersionPointer(value: unknown): asserts value is VersionPointer {
+function assertVersionPointer(
+	value: unknown,
+	requireSequence = true,
+): asserts value is VersionPointer {
 	const pointer = objectAt(value, "signed latest pointer");
 	assertHash(pointer.manifest_hash, "pointer manifest_hash");
 	if (
@@ -109,9 +134,14 @@ function assertVersionPointer(value: unknown): asserts value is VersionPointer {
 			"signed latest pointer has invalid version/signature",
 		);
 	}
+	const validSequence =
+		Number.isSafeInteger(pointer.sequence) && (pointer.sequence as number) >= 0;
 	if (
-		!Number.isSafeInteger(pointer.sequence) ||
-		(pointer.sequence as number) < 0
+		(requireSequence && !validSequence) ||
+		(!requireSequence &&
+			pointer.sequence !== undefined &&
+			pointer.sequence !== null &&
+			!validSequence)
 	) {
 		throw new IntegrityError(
 			"signed latest pointer is missing a non-negative monotonic sequence",
@@ -119,8 +149,14 @@ function assertVersionPointer(value: unknown): asserts value is VersionPointer {
 	}
 	for (const field of ["bundle_id", "channel"] as const) {
 		const item = pointer[field];
-		if (item !== undefined && item !== null && typeof item !== "string") {
-			throw new IntegrityError(`pointer ${field} must be a string or null`);
+		if (
+			item !== undefined &&
+			item !== null &&
+			(typeof item !== "string" || item.length > 200)
+		) {
+			throw new IntegrityError(
+				`pointer ${field} must be a string of at most 200 characters or null`,
+			);
 		}
 	}
 }
@@ -272,7 +308,7 @@ function downgradeReason(
 function assertExpectedIdentity(pointer: VersionPointer, args: SyncArgs): void {
 	if (
 		args.expectedBundleId !== undefined &&
-		pointer.bundle_id !== args.expectedBundleId
+		(pointer.bundle_id ?? null) !== args.expectedBundleId
 	) {
 		throw new IntegrityError(
 			"signed pointer does not match expected bundle identity",
@@ -280,12 +316,55 @@ function assertExpectedIdentity(pointer: VersionPointer, args: SyncArgs): void {
 	}
 	if (
 		args.expectedChannel !== undefined &&
-		pointer.channel !== args.expectedChannel
+		(pointer.channel ?? null) !== args.expectedChannel
 	) {
 		throw new IntegrityError(
 			"signed pointer does not match expected release channel",
 		);
 	}
+}
+
+function report(args: SyncArgs, progress: SyncProgress): void {
+	try {
+		args.onProgress?.(progress);
+	} catch {
+		// Observability cannot acquire authority over promotion or integrity.
+	}
+}
+
+function validateWantedPaths(paths: ReadonlyArray<string> | undefined): void {
+	if (paths === undefined) return;
+	if (paths.length > MAX_SYNC_FILES) {
+		throw new SyncCapError(`wantedPaths exceeds ${MAX_SYNC_FILES}-path cap`);
+	}
+	const unique = new Set<string>();
+	for (const path of paths) {
+		assertSafePath(path);
+		if (unique.has(path)) {
+			throw new IntegrityError(`wantedPaths repeats path ${path}`);
+		}
+		unique.add(path);
+	}
+}
+
+function selectedFiles(
+	manifest: IndexManifest,
+	paths: ReadonlyArray<string> | undefined,
+): ReadonlyArray<FileEntry> {
+	if (paths === undefined) return manifest.files;
+	const selected = new Set<string>();
+	for (const path of paths) {
+		const matches = manifest.files.filter((entry) =>
+			path.endsWith("/") ? entry.path.startsWith(path) : entry.path === path,
+		);
+		if (matches.length === 0) {
+			throw new IntegrityError(
+				`wanted path ${path} is not in the signed manifest`,
+			);
+		}
+		for (const entry of matches) selected.add(entry.path);
+	}
+	return manifest.files.filter((entry) => selected.has(entry.path));
 }
 
 function assertSafePath(path: unknown): asserts path is string {
@@ -418,14 +497,14 @@ async function fetchManifest(
 }
 
 async function missingChunks(
-	manifest: IndexManifest,
+	files: ReadonlyArray<FileEntry>,
 	store: CacheStore,
 ): Promise<{
 	readonly missing: ReadonlyArray<ChunkRef>;
 	readonly reused: number;
 }> {
 	const wanted = new Map<string, ChunkRef>();
-	for (const entry of manifest.files) {
+	for (const entry of files) {
 		for (const ref of entry.chunks) wanted.set(ref.hash, ref);
 	}
 	const missing: ChunkRef[] = [];
@@ -452,11 +531,13 @@ async function fetchMissing(
 	fetchBytes: FetchBytes,
 	store: CacheStore,
 	maxTotalBytes: number,
+	onChunk: (completed: number, total: number, bytesFetched: number) => void,
 ): Promise<number> {
 	let next = 0;
 	let total = 0;
 	let remaining = maxTotalBytes;
 	let inFlight = 0;
+	let completed = 0;
 	const budgetWaiters: Array<() => void> = [];
 	let failure: unknown;
 	const reserve = async (): Promise<number> => {
@@ -499,6 +580,8 @@ async function fetchMissing(
 				consumed = compressed.byteLength;
 				total += consumed;
 				await store.putChunkCompressed(ref.hash, compressed, ref.size);
+				completed += 1;
+				onChunk(completed, missing.length, total);
 			} catch (error) {
 				failure ??=
 					error instanceof SyncCapError
@@ -550,16 +633,15 @@ async function reassemble(
 }
 
 async function verifyReassembly(
-	manifest: IndexManifest,
+	files: ReadonlyArray<FileEntry>,
 	store: CacheStore,
 ): Promise<void> {
-	for (const entry of manifest.files) await reassemble(entry, store);
+	for (const entry of files) await reassemble(entry, store);
 }
 
-function distinctChunks(manifest: IndexManifest): number {
-	return new Set(
-		manifest.files.flatMap((entry) => entry.chunks.map((ref) => ref.hash)),
-	).size;
+function distinctChunks(files: ReadonlyArray<FileEntry>): number {
+	return new Set(files.flatMap((entry) => entry.chunks.map((ref) => ref.hash)))
+		.size;
 }
 
 async function syncFromCache(
@@ -569,23 +651,54 @@ async function syncFromCache(
 ): Promise<SyncResult | null> {
 	const active = await store.readActive();
 	if (active === null) return null;
-	assertVersionPointer(active);
+	assertVersionPointer(active, false);
 	await verify(pointerSigningBytes(active), active.signature);
 	assertExpectedIdentity(active, args);
 	const raw = await store.getManifest(active.manifest_hash);
 	const manifest = parseJson(raw, "cached manifest");
 	assertManifest(manifest, active);
-	await verifyReassembly(manifest, store);
+	const files = selectedFiles(manifest, args.wantedPaths);
+	report(args, {
+		phase: "manifest",
+		totalFiles: manifest.files.length,
+		selectedFiles: files.length,
+	});
+	await verifyReassembly(files, store);
 	return {
 		version: active.version,
 		manifestHash: active.manifest_hash,
 		chunksFetched: 0,
-		chunksReused: distinctChunks(manifest),
+		chunksReused: distinctChunks(files),
 		bytesFetched: 0,
 	};
 }
 
+async function authenticatedActive(
+	store: CacheStore,
+	args: SyncArgs,
+	verify: Verify,
+): Promise<VersionPointer | null> {
+	for (let attempt = 0; attempt < 4; attempt += 1) {
+		const active = await store.readActive();
+		if (active === null) return null;
+		assertVersionPointer(active, false);
+		try {
+			await verify(pointerSigningBytes(active), active.signature);
+		} catch (error) {
+			if (!(error instanceof SignatureError)) throw error;
+			if (await store.clearActiveIf(active)) return null;
+			continue;
+		}
+		assertExpectedIdentity(active, args);
+		return active;
+	}
+	throw new IntegrityError(
+		"persistent active pointer changed during verification",
+	);
+}
+
 export async function syncIndex(args: SyncArgs): Promise<SyncResult> {
+	validateWantedPaths(args.wantedPaths);
 	const { baseUrl, store, fetchBytes, verify } = args;
 	let pointer: VersionPointer;
 	try {
@@ -598,29 +711,58 @@ export async function syncIndex(args: SyncArgs): Promise<SyncResult> {
 		throw error;
 	}
 	assertExpectedIdentity(pointer, args);
-	const active = await store.readActive();
+	report(args, { phase: "pointer", version: pointer.version });
+	const active = await authenticatedActive(store, args, verify);
 	const refusal = active === null ? null : downgradeReason(pointer, active);
 	if (refusal !== null) {
 		throw new RollbackError(refusal);
 	}
-	const manifest = await fetchManifest(baseUrl, pointer, fetchBytes, store);
-	const { missing, reused } = await missingChunks(manifest, store);
-	const bytesFetched = await fetchMissing(
-		baseUrl,
-		missing,
-		fetchBytes,
-		store,
-		totalFetchLimit(args),
-	);
-	await verifyReassembly(manifest, store);
-	await store.promote(pointer);
-	return {
-		version: pointer.version,
-		manifestHash: pointer.manifest_hash,
-		chunksFetched: missing.length,
-		chunksReused: reused,
-		bytesFetched,
-	};
+	try {
+		const manifest = await fetchManifest(baseUrl, pointer, fetchBytes, store);
+		const files = selectedFiles(manifest, args.wantedPaths);
+		report(args, {
+			phase: "manifest",
+			totalFiles: manifest.files.length,
+			selectedFiles: files.length,
+		});
+		const { missing, reused } = await missingChunks(files, store);
+		const bytesFetched = await fetchMissing(
+			baseUrl,
+			missing,
+			fetchBytes,
+			store,
+			totalFetchLimit(args),
+			(fetchedChunks, totalChunks, fetchedBytes) =>
+				report(args, {
+					phase: "chunks",
+					fetchedChunks,
+					totalChunks,
+					bytesFetched: fetchedBytes,
+				}),
+		);
+		await verifyReassembly(files, store);
+		await store.promote(pointer);
+		const result = {
+			version: pointer.version,
+			manifestHash: pointer.manifest_hash,
+			chunksFetched: missing.length,
+			chunksReused: reused,
+			bytesFetched,
+		};
+		report(args, { phase: "promoted", result });
+		return result;
+	} catch (error) {
+		if (active !== null && isQuotaError(error)) {
+			try {
+				const cached = await syncFromCache(store, args, verify);
+				if (cached !== null) return cached;
+			} catch {
+				// A partial write must not hide the actionable storage failure behind
+				// a secondary missing-chunk/integrity error from the cache fallback.
+			}
+		}
+		throw error;
+	}
 }
 
 function fileEntry(manifest: IndexManifest, path: string): FileEntry {

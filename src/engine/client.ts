@@ -16,8 +16,11 @@
 // read from it again. Settling the promises without releasing the thread just
 // trades a hung caller for a leaked one.
 
+import { EngineOperationError } from "./engineError.js";
+import type { IndexedDbLayoutOptions } from "./indexedDbStore.js";
 import type { EngineRequest, EngineResponse } from "./protocol.js";
-import type { SyncResult } from "./types.js";
+import type { SyncProgress } from "./sync.js";
+import type { EngineSyncResult, StoragePreference } from "./types.js";
 import {
 	DEFAULT_REQUEST_TIMEOUT_MS,
 	WorkerCrashError,
@@ -41,13 +44,37 @@ export interface EngineWorkerLike {
 
 /** Tuning knobs for the client (defaults suit the engine's sync/readFile calls). */
 export interface EngineClientOptions {
+	/** Idle deadline. Every authenticated sync progress event re-arms it. */
+	readonly idleTimeoutMs?: number;
+	/** @deprecated Use idleTimeoutMs. Retained for source compatibility. */
 	readonly requestTimeoutMs?: number;
 }
+
+export interface EngineSyncOptions {
+	/** undefined skips the identity check; null requires absent/null. */
+	readonly expectedBundleId?: string | null;
+	/** undefined skips the identity check; null requires absent/null. */
+	readonly expectedChannel?: string | null;
+	/** undefined fetches all files; [] authenticates/promotes only the catalog. */
+	readonly wantedPaths?: ReadonlyArray<string>;
+	readonly storageBackend?: StoragePreference;
+	readonly cacheNamespace?: string;
+	/** Existing consumers can declaratively retain their database/store/key layout. */
+	readonly indexedDbLayout?: IndexedDbLayoutOptions;
+	readonly onProgress?: (progress: SyncProgress) => void;
+}
+
+export type EngineStorageOptions = Pick<
+	EngineSyncOptions,
+	"storageBackend" | "cacheNamespace" | "indexedDbLayout"
+>;
 
 interface Pending {
 	readonly resolve: (response: EngineResponse) => void;
 	readonly reject: (error: Error) => void;
-	readonly timer: ReturnType<typeof setTimeout>;
+	readonly request: EngineRequest;
+	readonly onProgress?: (progress: SyncProgress) => void;
+	timer: ReturnType<typeof setTimeout> | undefined;
 }
 
 export class EngineClient {
@@ -64,7 +91,13 @@ export class EngineClient {
 		options: EngineClientOptions = {},
 	) {
 		this.#worker = worker;
-		this.#timeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
+		this.#timeoutMs =
+			options.idleTimeoutMs ??
+			options.requestTimeoutMs ??
+			DEFAULT_REQUEST_TIMEOUT_MS;
+		if (!Number.isSafeInteger(this.#timeoutMs) || this.#timeoutMs < 1) {
+			throw new TypeError("idle timeout must be a positive safe integer");
+		}
 		this.#worker.addEventListener("message", (event) => {
 			this.#onMessage(event.data);
 		});
@@ -76,45 +109,70 @@ export class EngineClient {
 		});
 	}
 
-	/**
-	 * Spawn the bundled engine Worker (module worker).
-	 *
-	 * THE EXTENSION IS `.js`, NOT `.ts`, AND THAT IS LOAD-BEARING. This string
-	 * is a plain literal — `tsc` emits it verbatim, it is not rewritten — so it
-	 * has to name the file as it exists in the PUBLISHED artefact, which is
-	 * `dist/engine/worker.js`. Inside this repo's own source tree the sibling
-	 * file is `worker.ts`, so the two only agree after a build. That is exactly
-	 * the kind of claim that rots silently: nothing here throws if the URL
-	 * resolves to nothing, the Worker just never boots. `test/dist-contract.
-	 * test.ts` runs against real build output and fails if this path does not
-	 * point at a file that exists.
-	 */
-	public static spawn(options?: EngineClientOptions): EngineClient {
-		const worker = new Worker(new URL("./worker.js", import.meta.url), {
-			type: "module",
-		});
-		return new EngineClient(worker, options);
-	}
-
 	/** Sync the signed bundle at `baseUrl`, pinning the raw pubkey at `pubkeyUrl`. */
+	public sync(
+		baseUrl: string,
+		pubkeyUrl: string,
+		options?: EngineSyncOptions,
+	): Promise<EngineSyncResult>;
+	public sync(
+		baseUrl: string,
+		pubkeyUrl: string,
+		expectedBundleId?: string | null,
+		expectedChannel?: string | null,
+		options?: Omit<EngineSyncOptions, "expectedBundleId" | "expectedChannel">,
+	): Promise<EngineSyncResult>;
 	public async sync(
 		baseUrl: string,
 		pubkeyUrl: string,
-		expectedBundleId = "amazon-demo",
-		expectedChannel = "stable",
-	): Promise<SyncResult> {
-		const response = await this.#send({
-			kind: "sync",
-			id: this.#allocId(),
-			baseUrl,
-			pubkeyUrl,
-			expectedBundleId,
-			expectedChannel,
-		});
+		identityOrOptions?: string | null | EngineSyncOptions,
+		expectedChannel?: string | null,
+		controls: Omit<
+			EngineSyncOptions,
+			"expectedBundleId" | "expectedChannel"
+		> = {},
+	): Promise<EngineSyncResult> {
+		const options =
+			typeof identityOrOptions === "object" && identityOrOptions !== null
+				? identityOrOptions
+				: {
+						...controls,
+						...(identityOrOptions !== undefined
+							? { expectedBundleId: identityOrOptions }
+							: {}),
+						...(expectedChannel !== undefined ? { expectedChannel } : {}),
+					};
+		const response = await this.#send(
+			{
+				kind: "sync",
+				id: this.#allocId(),
+				baseUrl,
+				pubkeyUrl,
+				...(options.expectedBundleId !== undefined
+					? { expectedBundleId: options.expectedBundleId }
+					: {}),
+				...(options.expectedChannel !== undefined
+					? { expectedChannel: options.expectedChannel }
+					: {}),
+				...(options.wantedPaths !== undefined
+					? { wantedPaths: options.wantedPaths }
+					: {}),
+				...(options.storageBackend !== undefined
+					? { storageBackend: options.storageBackend }
+					: {}),
+				...(options.cacheNamespace !== undefined
+					? { cacheNamespace: options.cacheNamespace }
+					: {}),
+				...(options.indexedDbLayout !== undefined
+					? { indexedDbLayout: options.indexedDbLayout }
+					: {}),
+			},
+			options.onProgress,
+		);
 		if (response.ok && response.kind === "sync") {
 			return response.result;
 		}
-		throw new Error(this.#errorOf(response));
+		throw this.#errorOf(response);
 	}
 
 	/** Materialize a synced file's bytes from the active manifest. */
@@ -127,7 +185,26 @@ export class EngineClient {
 		if (response.ok && response.kind === "readFile") {
 			return response.bytes;
 		}
-		throw new Error(this.#errorOf(response));
+		throw this.#errorOf(response);
+	}
+
+	/** Clear this Worker's durable cache under the same lock used by sync/read. */
+	public async clear(options: EngineStorageOptions = {}): Promise<void> {
+		const response = await this.#send({
+			kind: "clear",
+			id: this.#allocId(),
+			...(options.storageBackend === undefined
+				? {}
+				: { storageBackend: options.storageBackend }),
+			...(options.cacheNamespace === undefined
+				? {}
+				: { cacheNamespace: options.cacheNamespace }),
+			...(options.indexedDbLayout === undefined
+				? {}
+				: { indexedDbLayout: options.indexedDbLayout }),
+		});
+		if (response.ok && response.kind === "clear") return;
+		throw this.#errorOf(response);
 	}
 
 	/** Reject in-flight work and release the sync worker. Safe to call twice. */
@@ -149,38 +226,68 @@ export class EngineClient {
 		return this.#nextId;
 	}
 
-	#errorOf(response: EngineResponse): string {
-		return response.ok ? "unexpected response kind" : response.error;
+	#errorOf(response: EngineResponse): Error {
+		return response.ok
+			? new Error("unexpected response kind")
+			: new EngineOperationError(response.error);
 	}
 
-	#send(request: EngineRequest): Promise<EngineResponse> {
+	#send(
+		request: EngineRequest,
+		onProgress?: (progress: SyncProgress) => void,
+	): Promise<EngineResponse> {
 		if (this.#crash !== undefined) {
 			return Promise.reject(this.#crash);
 		}
 		return new Promise<EngineResponse>((resolve, reject) => {
-			const timer = setTimeout(() => {
-				this.#pending.delete(request.id);
-				reject(
-					new WorkerTimeoutError(
-						`engine request ${request.id} (${request.kind}) exceeded ${this.#timeoutMs}ms`,
-					),
-				);
-				// The caller's promise is settled, but nothing has bounded the
-				// WORKER yet — it is still running whatever went silent. Release
-				// it and latch, so the next request fails fast instead of being
-				// posted into the same silence.
+			const pending: Pending = {
+				resolve,
+				reject,
+				request,
+				...(onProgress === undefined ? {} : { onProgress }),
+				timer: undefined,
+			};
+			pending.timer = this.#deadline(pending);
+			this.#pending.set(request.id, pending);
+			try {
+				this.#worker.postMessage(request);
+			} catch (error) {
 				this.#onCrash(
-					`request ${request.id} (${request.kind}) went unanswered for ${this.#timeoutMs}ms`,
+					error instanceof Error ? error.message : "worker postMessage failed",
 				);
-			}, this.#timeoutMs);
-			this.#pending.set(request.id, { resolve, reject, timer });
-			this.#worker.postMessage(request);
+			}
 		});
+	}
+
+	#deadline(pending: Pending): ReturnType<typeof setTimeout> {
+		return setTimeout(() => {
+			this.#pending.delete(pending.request.id);
+			pending.reject(
+				new WorkerTimeoutError(
+					`engine request ${pending.request.id} (${pending.request.kind}) was idle for ${this.#timeoutMs}ms`,
+				),
+			);
+			this.#onCrash(
+				`request ${pending.request.id} (${pending.request.kind}) was idle for ${this.#timeoutMs}ms`,
+			);
+		}, this.#timeoutMs);
 	}
 
 	#onMessage(response: EngineResponse): void {
 		const pending = this.#pending.get(response.id);
 		if (pending === undefined) {
+			return;
+		}
+		if (response.ok && response.kind === "syncProgress") {
+			if (pending.request.kind === "sync") {
+				clearTimeout(pending.timer);
+				pending.timer = this.#deadline(pending);
+				try {
+					pending.onProgress?.(response.progress);
+				} catch {
+					// Observability cannot terminate or settle the integrity operation.
+				}
+			}
 			return;
 		}
 		this.#pending.delete(response.id);

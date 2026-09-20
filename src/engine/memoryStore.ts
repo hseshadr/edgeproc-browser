@@ -2,6 +2,7 @@
 // store, so the sync state machine is testable without OPFS (per the spec's
 // "thin in-memory CacheStore" for pure-logic tests).
 
+import { samePointer } from "./activePointer.js";
 import { sha256Hex } from "./crypto.js";
 import { decompressAndVerify, verifyPlaintext } from "./integrity.js";
 import type { CacheStore, VersionPointer } from "./types.js";
@@ -67,6 +68,23 @@ export class MemoryCacheStore implements CacheStore {
 
 	public promote(pointer: VersionPointer): Promise<void> {
 		this.#active = pointer;
+		return Promise.resolve();
+	}
+
+	public clearActiveIf(expected: VersionPointer): Promise<boolean> {
+		if (!samePointer(this.#active, expected)) return Promise.resolve(false);
+		this.#active = null;
+		return Promise.resolve(true);
+	}
+
+	public pruneInactive(): Promise<void> {
+		return Promise.resolve();
+	}
+
+	public clear(): Promise<void> {
+		this.#chunks.clear();
+		this.#manifests.clear();
+		this.#active = null;
 		return Promise.resolve();
 	}
 }

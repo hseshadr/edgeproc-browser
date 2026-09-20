@@ -25,21 +25,30 @@ ships, the latest minor of the current major will be supported as well.
 
 ## Threat model
 
-`@edgeproc/browser` is a pure library with zero runtime dependencies. It does no
-I/O: no network, no filesystem, no process or environment access. It takes
-values you hand it, matches them against a catalog you register, and returns
-strings and plain objects.
+`@edgeproc/browser` deliberately performs network and browser-storage I/O. Its
+security boundary is a signed, monotonic pointer: the Worker fetches a pinned
+public key without HTTP-cache reuse, verifies the pointer, content-addresses the
+manifest, bounds compressed and expanded bytes, verifies every chunk and
+reassembled file, then promotes last. Invalid bytes never become a degraded
+result.
 
-Two things are worth knowing when you use it:
+Important integration rules:
 
-- **Error text is data you control.** Catalog descriptions come from your own
-  catalog and your own i18next translations. This library interpolates params
-  into them; it does not escape them. If you render a description into HTML,
-  escape it at the render site like any other string.
-- **Codes are meant to be public.** A code such as `ai.provider.out_of_credits`
-  is a stable, greppable identifier and is safe to log or send over the wire.
-  Params are not — if you put a secret in a param, it will appear in the
-  description and in the RFC 9457 payload. Keep secrets out of params.
+- Pin the expected bundle and channel when the publisher has those identities.
+  `undefined` deliberately skips a pin; `null` requires a legacy absent/null
+  field exactly.
+- Treat the configured public-key URL as a trust root. Serve it over HTTPS and
+  control it separately from mutable bundle content.
+- Cache names and legacy IndexedDB layouts are local identifiers, not secrets.
+  Layout input is bounded and cannot select arbitrary code or callbacks.
+- OPFS content and the IndexedDB rollback pointer are untrusted durable state.
+  They are revalidated before use; equal-sequence disagreement fails closed.
+- Worker error messages can include URLs or producer-controlled identifiers.
+  Do not render them as HTML and do not place secrets in bundle paths or URLs.
+- The network sentinel is evidence about requests, not an access-control
+  mechanism. Same-origin channel messages are shape-checked but are not treated
+  as authenticated actors.
 
-If you find a way to make this library read, write, or leak anything outside the
-values passed into it, that is a vulnerability and we want to hear about it.
+Runtime dependencies are `@noble/ed25519`, `@hpcc-js/wasm-zstd`, and
+`idb-keyval`. The optional SQLite vector subpath ships pinned local WASM assets
+and does not load code from a CDN.
