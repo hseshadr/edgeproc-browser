@@ -7,7 +7,14 @@
 	},
 	"files": {
 		"ignoreUnknown": false,
-		"includes": ["**", "!**/coverage", "!docs/architecture"]
+		"includes": [
+			"**",
+			"!**/coverage",
+			"!docs/architecture",
+			"!src/vector/sqlite/assets/sqlite3.mjs",
+			"!src/vector/sqlite/assets/sqlite3.wasm",
+			"!test-results"
+		]
 	},
 	"formatter": {
 		"enabled": true,
