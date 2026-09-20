@@ -8,6 +8,7 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { EngineClient, type EngineWorkerLike } from "./client.js";
+import { EngineOperationError } from "./engineError.js";
 import type { EngineRequest, EngineResponse } from "./protocol.js";
 import {
 	DEFAULT_REQUEST_TIMEOUT_MS,
@@ -57,6 +58,19 @@ afterEach(() => {
 });
 
 describe("a Worker that dies never leaves a caller hanging", () => {
+	it("rejects and releases when postMessage throws synchronously", async () => {
+		const fake = fakeWorker();
+		fake.worker.postMessage = () => {
+			throw new DOMException("could not clone request", "DataCloneError");
+		};
+		const client = new EngineClient(fake.worker);
+
+		await expect(client.readFile("catalog_meta.json")).rejects.toBeInstanceOf(
+			WorkerCrashError,
+		);
+		expect(fake.terminate).toHaveBeenCalledOnce();
+	});
+
 	it("rejects the in-flight request with WorkerCrashError on 'error'", async () => {
 		const fake = fakeWorker();
 		const client = new EngineClient(fake.worker);
@@ -219,9 +233,17 @@ describe("replies are correlated, not trusted", () => {
 			ok: false,
 			kind: "sync",
 			id: fake.sent[0]?.id ?? 0,
-			error: "signature verification failed",
+			error: {
+				code: "integrity",
+				message: "signature verification failed",
+			},
 		} as EngineResponse);
-		await expect(pending).rejects.toThrow("signature verification failed");
+		const error = await pending.catch((reason: unknown) => reason);
+		expect(error).toBeInstanceOf(EngineOperationError);
+		expect(error).toMatchObject({
+			code: "integrity",
+			message: "signature verification failed",
+		});
 	});
 
 	it("rejects a well-formed reply of the WRONG kind", async () => {
@@ -278,32 +300,191 @@ describe("dispose", () => {
 	});
 });
 
-describe("sync pins a bundle identity by default", () => {
+describe("sync identity and storage options", () => {
 	it("sends the caller's expected bundle id and channel", async () => {
 		const fake = fakeWorker();
 		const client = new EngineClient(fake.worker);
 		client
-			.sync("https://cdn.example", "/public.key", "my-bundle", "beta")
+			.sync("https://cdn.example", "/public.key", {
+				expectedBundleId: "my-bundle",
+				expectedChannel: "beta",
+				wantedPaths: ["catalog/"],
+				storageBackend: "indexeddb",
+				cacheNamespace: "my-consumer",
+				indexedDbLayout: {
+					database: "legacy-cache-v1",
+					store: "entries",
+					separator: "/",
+				},
+			})
 			.catch(() => {});
 		expect(fake.sent[0]).toMatchObject({
 			kind: "sync",
 			expectedBundleId: "my-bundle",
 			expectedChannel: "beta",
+			wantedPaths: ["catalog/"],
+			storageBackend: "indexeddb",
+			cacheNamespace: "my-consumer",
+			indexedDbLayout: {
+				database: "legacy-cache-v1",
+				store: "entries",
+				separator: "/",
+			},
 		});
 		client.dispose();
 	});
 
-	it("always sends BOTH pins even when the caller omits them", async () => {
-		// The Worker refuses an unpinned sync, so an omitted pin must become a
-		// concrete value here rather than travelling as undefined.
+	it("omits identity pins when the caller does not configure them", async () => {
 		const fake = fakeWorker();
 		const client = new EngineClient(fake.worker);
 		client.sync("https://cdn.example", "/public.key").catch(() => {});
 		const sent = fake.sent[0] as unknown as Record<string, unknown>;
-		expect(typeof sent.expectedBundleId).toBe("string");
-		expect(typeof sent.expectedChannel).toBe("string");
-		expect(sent.expectedBundleId).not.toBe("");
-		expect(sent.expectedChannel).not.toBe("");
+		expect(sent).not.toHaveProperty("expectedBundleId");
+		expect(sent).not.toHaveProperty("expectedChannel");
 		client.dispose();
+	});
+
+	it("preserves the legacy positional identity call shape", () => {
+		const fake = fakeWorker();
+		const client = new EngineClient(fake.worker);
+		client
+			.sync("https://cdn.example", "/public.key", "my-bundle", "stable")
+			.catch(() => {});
+		expect(fake.sent[0]).toMatchObject({
+			expectedBundleId: "my-bundle",
+			expectedChannel: "stable",
+		});
+		client.dispose();
+	});
+});
+
+describe("sync progress is an idle-timeout heartbeat", () => {
+	it("re-arms the deadline for each progress event without settling the request", async () => {
+		vi.useFakeTimers();
+		const fake = fakeWorker();
+		const onProgress = vi.fn();
+		const client = new EngineClient(fake.worker, { idleTimeoutMs: 50 });
+		const pending = client.sync("https://cdn.example", "/public.key", {
+			onProgress,
+		});
+		const id = fake.sent[0]?.id ?? 0;
+
+		await vi.advanceTimersByTimeAsync(40);
+		fake.reply({
+			ok: true,
+			id,
+			kind: "syncProgress",
+			progress: {
+				phase: "chunks",
+				fetchedChunks: 1,
+				totalChunks: 2,
+				bytesFetched: 5,
+			},
+		});
+		await vi.advanceTimersByTimeAsync(40);
+		expect(fake.terminate).not.toHaveBeenCalled();
+		expect(onProgress).toHaveBeenCalledOnce();
+
+		fake.reply({
+			ok: true,
+			id,
+			kind: "sync",
+			result: {
+				version: "v1",
+				manifestHash: "a".repeat(64),
+				chunksFetched: 1,
+				chunksReused: 0,
+				bytesFetched: 5,
+				cacheBackend: "indexeddb",
+			},
+		});
+		await expect(pending).resolves.toMatchObject({ cacheBackend: "indexeddb" });
+	});
+
+	it("isolates a throwing progress observer from the sync result", async () => {
+		const fake = fakeWorker();
+		const client = new EngineClient(fake.worker);
+		const pending = client.sync("https://cdn.example", "/public.key", {
+			onProgress: () => {
+				throw new Error("render failed");
+			},
+		});
+		const id = fake.sent[0]?.id ?? 0;
+		fake.reply({
+			ok: true,
+			id,
+			kind: "syncProgress",
+			progress: { phase: "pointer", version: "v1" },
+		});
+		fake.reply({
+			ok: true,
+			id,
+			kind: "sync",
+			result: {
+				version: "v1",
+				manifestHash: "a".repeat(64),
+				chunksFetched: 0,
+				chunksReused: 0,
+				bytesFetched: 0,
+				cacheBackend: "indexeddb",
+			},
+		});
+
+		await expect(pending).resolves.toMatchObject({ version: "v1" });
+	});
+
+	it("does not re-arm an unrelated read request", async () => {
+		vi.useFakeTimers();
+		const fake = fakeWorker();
+		const client = new EngineClient(fake.worker, { idleTimeoutMs: 50 });
+		const pending = client.readFile("catalog_meta.json");
+		const assertion =
+			expect(pending).rejects.toBeInstanceOf(WorkerTimeoutError);
+		await vi.advanceTimersByTimeAsync(40);
+		fake.reply({
+			ok: true,
+			id: fake.sent[0]?.id ?? 0,
+			kind: "syncProgress",
+			progress: {
+				phase: "chunks",
+				fetchedChunks: 1,
+				totalChunks: 1,
+				bytesFetched: 5,
+			},
+		});
+		await vi.advanceTimersByTimeAsync(11);
+		await assertion;
+	});
+});
+
+describe("explicit cache clear", () => {
+	it("sends the storage identity and resolves only a clear response", async () => {
+		const fake = fakeWorker();
+		const client = new EngineClient(fake.worker);
+		const pending = client.clear({
+			cacheNamespace: "my-consumer",
+			storageBackend: "indexeddb",
+			indexedDbLayout: {
+				database: "legacy-cache-v1",
+				store: "entries",
+				separator: "/",
+			},
+		});
+		expect(fake.sent[0]).toMatchObject({
+			kind: "clear",
+			cacheNamespace: "my-consumer",
+			storageBackend: "indexeddb",
+			indexedDbLayout: {
+				database: "legacy-cache-v1",
+				store: "entries",
+				separator: "/",
+			},
+		});
+		fake.reply({
+			ok: true,
+			id: fake.sent[0]?.id ?? 0,
+			kind: "clear",
+		});
+		await expect(pending).resolves.toBeUndefined();
 	});
 });

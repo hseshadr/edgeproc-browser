@@ -26,7 +26,11 @@ const REAL_CHUNK_SIZE = catalogMetaChunkSize();
 /** One OPFS file as a growable byte buffer; the sync access handle reads/writes it. */
 class FakeFile {
 	public bytes = new Uint8Array();
+	public handleFailure: Error | undefined;
 	public createSyncAccessHandle(): Promise<FileSystemSyncAccessHandle> {
+		if (this.handleFailure !== undefined) {
+			return Promise.reject(this.handleFailure);
+		}
 		return Promise.resolve(
 			new FakeSyncHandle(this) as unknown as FileSystemSyncAccessHandle,
 		);
@@ -102,6 +106,9 @@ class FakeDir {
 		}
 		return Promise.resolve();
 	}
+	public async *entries(): AsyncGenerator<[string, FakeFile]> {
+		for (const entry of this.files) yield entry;
+	}
 }
 
 /** Point navigator.storage.getDirectory at a fresh fake OPFS root; return the root. */
@@ -172,6 +179,36 @@ describe("OpfsCacheStore self-heal on a corrupt chunk", () => {
 
 		expect(await store.hasChunk(REAL_CHUNK)).toBe(true);
 	});
+
+	it("treats a zero-byte object as absent and removes it", async () => {
+		const root = stubOpfs();
+		const store = await OpfsCacheStore.open();
+		const chunkDir = root.dirs.get("chunk");
+		if (chunkDir === undefined) throw new Error("chunk directory missing");
+		chunkDir.files.set(REAL_CHUNK, new FakeFile());
+
+		expect(await store.hasChunk(REAL_CHUNK)).toBe(false);
+		expect(chunkDir.files.has(REAL_CHUNK)).toBe(false);
+	});
+
+	it("preserves a valid existing object when handle contention prevents a write", async () => {
+		const root = stubOpfs();
+		const store = await OpfsCacheStore.open();
+		const manifest = new TextEncoder().encode(
+			'{"schema_version":2,"files":[]}',
+		);
+		const hash = await store.putManifest(manifest);
+		const file = root.dirs.get("manifest")?.files.get(hash);
+		if (file === undefined) throw new Error("manifest file missing");
+		file.handleFailure = new DOMException("busy", "NoModificationAllowedError");
+
+		await expect(store.putManifest(manifest)).rejects.toThrow(/busy/iu);
+		expect(root.dirs.get("manifest")?.files.has(hash)).toBe(true);
+		file.handleFailure = undefined;
+		expect(Array.from(await store.getManifest(hash))).toEqual(
+			Array.from(manifest),
+		);
+	});
 });
 
 const pointer = (
@@ -197,6 +234,29 @@ describe("durable OPFS active pointer selection", () => {
 		const current = pointer(7);
 		expect(canPromotePointer(current, pointer(6))).toBe(false);
 		expect(canPromotePointer(current, pointer(7, "b".repeat(64)))).toBe(false);
+		expect(
+			canPromotePointer(current, { ...pointer(7), signature: "different" }),
+		).toBe(false);
 		expect(canPromotePointer(current, pointer(8))).toBe(true);
+	});
+
+	it("rejects equal-sequence disagreement across durable slots", () => {
+		expect(() =>
+			selectHighestPointer([
+				pointer(7),
+				{ ...pointer(7), signature: "different-signature" },
+			]),
+		).toThrow(/disagree/iu);
+	});
+
+	it("includes the legacy active pointer in the promotion floor", async () => {
+		const root = stubOpfs();
+		const legacy = new FakeFile();
+		legacy.bytes = new TextEncoder().encode(JSON.stringify(pointer(7)));
+		root.files.set("active", legacy);
+		const store = await OpfsCacheStore.open();
+
+		await expect(store.promote(pointer(6))).rejects.toThrow(/refusing/iu);
+		expect((await store.readActive())?.sequence).toBe(7);
 	});
 });

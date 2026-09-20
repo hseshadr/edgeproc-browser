@@ -106,6 +106,8 @@ describe("the incoming pointer is validated before it is acted on", () => {
 		["an empty signature", { signature: "" }],
 		["a negative sequence", { sequence: -1 }],
 		["a non-string identity", { bundle_id: 7 }],
+		["an oversized bundle identity", { bundle_id: "x".repeat(201) }],
+		["an oversized release channel", { channel: "x".repeat(201) }],
 	])("rejects %s before any immutable fetch", async (_label, malformed) => {
 		const origin = await originFor(emptyManifest());
 		const value =

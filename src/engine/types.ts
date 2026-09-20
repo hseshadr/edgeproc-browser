@@ -55,6 +55,14 @@ export interface SyncResult {
 	readonly bytesFetched: number;
 }
 
+export type CacheBackend = "indexeddb" | "opfs+indexeddb";
+export type StoragePreference = "auto" | "indexeddb";
+
+/** Sync outcome plus the durable backend selected by the Worker. */
+export interface EngineSyncResult extends SyncResult {
+	readonly cacheBackend: CacheBackend;
+}
+
 /**
  * Local content-addressed store. The OPFS-backed and in-memory implementations
  * share this surface — the seam edge-proc's `cas.py` `CacheStore` Protocol names.
@@ -73,6 +81,12 @@ export interface CacheStore {
 	getManifest(manifestHash: string): Promise<Uint8Array>;
 	readActive(): Promise<VersionPointer | null>;
 	promote(pointer: VersionPointer): Promise<void>;
+	/** Delete the pointer only if it has not raced to a newer authenticated value. */
+	clearActiveIf(expected: VersionPointer): Promise<boolean>;
+	/** Drop content not reachable from the active release. */
+	pruneInactive(): Promise<void>;
+	/** Explicitly clear this cache namespace. */
+	clear(): Promise<void>;
 }
 
 /** Transport seam: fetch raw bytes for a URL (injectable for tests). */

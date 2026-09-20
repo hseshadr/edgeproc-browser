@@ -1,5 +1,6 @@
 export { assertVectorIndexConformance } from "./conformance";
 export { FlatVectorIndex } from "./flat";
+export { type PackedVectorHit, PackedVectorIndex } from "./packed.js";
 export type {
 	Metadata,
 	Scalar,

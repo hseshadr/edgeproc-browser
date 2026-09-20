@@ -4,8 +4,8 @@
 
 Fetch under a byte cap. Verify an ed25519 signature over canonical JSON. Bound and verify every zstd decompression. Store chunks content-addressed in OPFS. Reassemble files. Do all of it in a Web Worker, and — this is the part nobody else does — let the main thread *observe that Worker's network activity*, so "no backend calls" is a measurement instead of a promise.
 
-Zero framework dependencies. Two runtime deps (`@noble/ed25519`,
-`@hpcc-js/wasm-zstd`), plus an opt-in, self-hosted SQLite vector runtime under
+Zero framework dependencies. Three small runtime deps (`@noble/ed25519`,
+`@hpcc-js/wasm-zstd`, and `idb-keyval`), plus an opt-in, self-hosted SQLite vector runtime under
 the separate `@edgeproc/browser/vector/sqlite` export.
 
 ## TL;DR
@@ -52,19 +52,34 @@ pnpm demo
 
 That is [`examples/quickstart.mjs`](./examples/quickstart.mjs), running against the real signed bundle committed in this repo. The transport is injected, so "no network" is structural rather than asserted.
 
-The planned package API looks like this after the package is published:
+With Vite, keep the Worker entry in consumer source so the bundler owns its URL:
 
 ```ts
-import { EngineClient, installNetworkSentinel } from "@edgeproc/browser";
-
-// --- in your Worker entry, one line, once ---
-installNetworkSentinel("my-worker");
-
-// --- on the main thread ---
-const client = EngineClient.spawn();
-const result = await client.sync(bundleBaseUrl, pubkeyUrl, "my-bundle", "stable");
-const bytes = await client.readFile("catalog_meta.json"); // verified or it throws
+// src/edgeproc.worker.ts
+import "@edgeproc/browser/worker";
 ```
+
+```ts
+// main thread
+import { EngineClient } from "@edgeproc/browser";
+import EdgeProcWorker from "./edgeproc.worker?worker";
+
+const client = new EngineClient(new EdgeProcWorker(), { idleTimeoutMs: 60_000 });
+const result = await client.sync(bundleBaseUrl, pubkeyUrl, {
+  expectedBundleId: "my-bundle",
+  expectedChannel: "stable",
+  wantedPaths: ["catalog_meta.json", "images/"],
+  onProgress: ({ phase }) => renderPhase(phase),
+});
+
+const bytes = await client.readFile("catalog_meta.json"); // verified or it throws
+await client.clear(); // same cross-tab lock as sync/read
+```
+
+`wantedPaths: undefined` syncs every signed file. `wantedPaths: []` verifies and
+promotes only the signed pointer and manifest, so an application can inspect a
+catalog first and fetch a selected directory later. Every verified chunk emits
+progress and re-arms the client's idle watchdog.
 
 To count what a Worker actually fetched, listen on the sentinel channel:
 
@@ -111,6 +126,10 @@ synchronous access handle.
 
 For ephemeral or small catalogs, import `FlatVectorIndex` from
 `@edgeproc/browser/vector`; it has the same contract and no WASM startup cost.
+For an immutable FLOAT32 matrix already authenticated by a signed bundle, use
+the synchronous `PackedVectorIndex`: it copies and validates the matrix, computes
+exact cosine similarity without another dependency, preserves producer order on
+ties, and zeroizes its owned storage on disposal.
 The build recipe, exact source pins, hashes, and licenses live beside the
 packaged assets in `src/vector/sqlite/assets/README.md`.
 
@@ -128,6 +147,7 @@ An unverifiable byte is not a degraded byte, it is a rejected one. Every path th
 | bundle exceeds a structural cap | `SyncCapError` |
 | Worker died before replying | `WorkerCrashError` |
 | Worker went silent | `WorkerTimeoutError` |
+| Worker operation failed | `EngineOperationError` with `integrity`, `rollback`, `network`, `storage`, or `internal` code |
 
 A network outage is the *only* condition that may serve cache, and it is a distinct type (`NetworkError`) for exactly that reason.
 
@@ -148,19 +168,47 @@ The rule: if a module needs to know what the bundle *contains*, it does not belo
 
 Stated plainly, because an unstated gap is a lie by omission:
 
-- **`opfsStore.ts` is not covered by this package's test suite** (57% of statements, and excluded from the coverage gate). jsdom has no OPFS implementation, so sync-access-handle contention, the nav-release race, and partial-write recovery are **unproven here**. They are exercised downstream against a real browser. This package needs its own real-browser tier before that module can carry a coverage claim.
+- **`opfsStore.ts` is excluded from the numeric jsdom coverage gate.** Its
+  in-memory OPFS double covers dual-slot promotion, zero-byte cleanup,
+  corruption recovery, and pre-write handle contention; real sync-access-handle
+  behavior is exercised in the Chromium tier.
 - **`worker.ts` is excluded too**, for a different reason: it is a top-level side effect, so importing it under jsdom would run it, not test it.
 - **The SQLite vector Worker is excluded from jsdom coverage for the same
   reason.** Its real Chromium test opens OPFS, verifies extension provenance,
   queries, disposes, reopens in a new Worker, and proves the records persisted
   without any external request.
-- Everything else clears the project floor — 95.92% statements, 92.40% branches, 100% functions, 96.64% lines.
+- Everything counted clears the project floor: 92.99% statements, 87.12%
+  branches, 97.92% functions, and 93.86% lines (258 tests at this change).
 
 ## Consuming this package
 
 It builds to ESM with fully-specified relative imports, so it works in Node and in every bundler. It is nonetheless **browser-only at runtime**: modules reference `BroadcastChannel`, `PerformanceObserver`, `navigator.storage`, and `WorkerGlobalScope`. Import it in bare Node and it will type-check and load, then fail the moment it touches a browser global. The exception is the pure-logic core (`crypto`, `canonical`, `integrity`, `zstd`, `sync` with `MemoryCacheStore`), which runs anywhere — that is what the quickstart exercises.
 
-`EngineClient.spawn()` constructs the Worker from `new URL("./worker.js", import.meta.url)`. Bundlers need that literal to stay statically analyzable; do not wrap it.
+Persistent storage writes new content to OPFS and keeps only the small active
+pointer rollback floor in IndexedDB. Reads can reuse verified legacy content
+from either store without duplicating new payloads, and full IndexedDB storage
+is used when OPFS is unavailable. Consumers with an existing cache can declare its
+database, object-store, and `:` or `/` key separator through
+`indexedDbLayout`, avoiding a duplicate migration layer. Names are bounded and
+validated.
+
+The root `EngineClient` export intentionally contains no Worker URL, so Vite
+does not emit an unused duplicate Worker beside the consumer-owned entry shown
+above. Direct, unbundled browser ESM deployments can opt into the separate
+spawn helper:
+
+```ts
+import { spawnEngineClient } from "@edgeproc/browser/spawn";
+
+const client = spawnEngineClient({ idleTimeoutMs: 60_000 });
+```
+
+`test/vite-consumer.test.ts` builds the recommended public API through Vite and
+proves that exactly one engine Worker asset is emitted.
+
+Exact Git-SHA installs are supported before the npm bootstrap: npm runs
+`prepare: npm run build`, while registry tarballs continue to contain only
+`dist/`.
 
 ## Architecture
 
@@ -168,9 +216,11 @@ Explore the [interactive runtime map](docs/architecture/index.html).
 
 ## Provenance
 
-This code was extracted from [edge-reco](https://github.com/hseshadr/edge-reco), where it had been running in production, rather than written fresh. The extraction is verifiable: **13 of its 14 modules differ from their origin only in import specifiers** (`./x` → `./x.js`, required for spec-correct ESM). The single substantive change is in `EngineClient.spawn()`, which now names `./worker.js` — the file as it exists in the package artefact — and is guarded by `test/dist-contract.test.ts` against real build output.
-
-`engine/crypto.ts` is byte-identical (`md5 864f84b8bed8660362489cf92d934e06`) to the copy shipping in all three consumer repos today.
+The original signed-bundle engine was extracted from
+[edge-reco](https://github.com/hseshadr/edge-reco), where it had already run in
+production. The shared package now also carries the consumer-independent
+persistence, scoped-sync, progress, typed-error, and packed-vector contracts;
+domain catalog selection and result-shape adapters remain in consumers.
 
 ## Development
 

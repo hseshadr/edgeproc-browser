@@ -48,6 +48,10 @@
 			"types": "./dist/engine/worker.d.ts",
 			"import": "./dist/engine/worker.js"
 		},
+		"./spawn": {
+			"types": "./dist/engine/spawn.d.ts",
+			"import": "./dist/engine/spawn.js"
+		},
 		"./vector": {
 			"types": "./dist/vector/index.d.ts",
 			"import": "./dist/vector/index.js"
@@ -64,26 +68,29 @@
 	],
 	"scripts": {
 		"build": "tsc -p tsconfig.build.json && node scripts/copy-vector-assets.mjs",
+		"prepare": "npm run build",
 		"typecheck": "tsc -p tsconfig.json --noEmit",
 		"test": "vitest run --coverage",
 		"test:browser": "tsc -p tsconfig.build.json && node scripts/copy-vector-assets.mjs && playwright test",
 		"test:watch": "vitest",
 		"lint": "biome check .",
 		"lint:fix": "biome check --write .",
-		"demo": "pnpm build && node examples/quickstart.mjs",
-		"gate": "pnpm lint && pnpm typecheck && pnpm build && pnpm test",
+		"demo": "npm run build && node examples/quickstart.mjs",
+		"gate": "npm run lint && npm run typecheck && npm run build && npm run test",
 		"preflight": "node scripts/preflight-publish.mjs",
-		"prepublishOnly": "pnpm preflight && pnpm gate"
+		"prepublishOnly": "npm run preflight && npm run gate"
 	},
 	"dependencies": {
 		"@hpcc-js/wasm-zstd": "^1.15.0",
-		"@noble/ed25519": "^3.1.0"
+		"@noble/ed25519": "^3.1.0",
+		"idb-keyval": "^6.3.0"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^2.5.5",
 		"@playwright/test": "^1.63.0",
 		"@types/node": "^26.1.2",
 		"@vitest/coverage-v8": "^4.1.11",
+		"fake-indexeddb": "^6.2.5",
 		"jsdom": "^30.0.0",
 		"typescript": "~7.0.2",
 		"vite": "^8.2.0",

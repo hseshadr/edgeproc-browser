@@ -2,7 +2,10 @@
 // owns OPFS + the sync engine; the main thread only sends requests + awaits
 // replies. Discriminated unions on `kind` / `ok` keep the bridge type-safe.
 
-import type { SyncResult } from "./types.js";
+import type { EngineErrorDetail } from "./engineError.js";
+import type { IndexedDbLayoutOptions } from "./indexedDbStore.js";
+import type { SyncProgress } from "./sync.js";
+import type { EngineSyncResult, StoragePreference } from "./types.js";
 
 /** Sync the signed bundle at `baseUrl`, pinning the raw pubkey at `pubkeyUrl`. */
 export interface SyncRequest {
@@ -10,8 +13,12 @@ export interface SyncRequest {
 	readonly id: number;
 	readonly baseUrl: string;
 	readonly pubkeyUrl: string;
-	readonly expectedBundleId: string;
-	readonly expectedChannel: string;
+	readonly expectedBundleId?: string | null;
+	readonly expectedChannel?: string | null;
+	readonly wantedPaths?: ReadonlyArray<string>;
+	readonly storageBackend?: StoragePreference;
+	readonly cacheNamespace?: string;
+	readonly indexedDbLayout?: IndexedDbLayoutOptions;
 }
 
 /** Materialize a synced file's bytes from the active manifest. */
@@ -21,26 +28,54 @@ export interface ReadFileRequest {
 	readonly path: string;
 }
 
-export type EngineRequest = SyncRequest | ReadFileRequest;
+/** Clear the configured durable cache under the same cross-tab lock as sync/read. */
+export interface ClearRequest {
+	readonly kind: "clear";
+	readonly id: number;
+	readonly storageBackend?: StoragePreference;
+	readonly cacheNamespace?: string;
+	readonly indexedDbLayout?: IndexedDbLayoutOptions;
+}
 
-interface SyncOk {
+export type EngineRequest = SyncRequest | ReadFileRequest | ClearRequest;
+
+export interface SyncOk {
 	readonly ok: true;
 	readonly id: number;
 	readonly kind: "sync";
-	readonly result: SyncResult;
+	readonly result: EngineSyncResult;
 }
 
-interface ReadFileOk {
+export interface SyncProgressResponse {
+	readonly ok: true;
+	readonly id: number;
+	readonly kind: "syncProgress";
+	readonly progress: SyncProgress;
+}
+
+export interface ReadFileOk {
 	readonly ok: true;
 	readonly id: number;
 	readonly kind: "readFile";
 	readonly bytes: Uint8Array;
 }
 
-interface EngineErr {
-	readonly ok: false;
+export interface ClearOk {
+	readonly ok: true;
 	readonly id: number;
-	readonly error: string;
+	readonly kind: "clear";
 }
 
-export type EngineResponse = SyncOk | ReadFileOk | EngineErr;
+export interface EngineErr {
+	readonly ok: false;
+	readonly id: number;
+	readonly kind: EngineRequest["kind"];
+	readonly error: EngineErrorDetail;
+}
+
+export type EngineResponse =
+	| SyncOk
+	| SyncProgressResponse
+	| ReadFileOk
+	| ClearOk
+	| EngineErr;

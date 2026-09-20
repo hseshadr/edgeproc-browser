@@ -7,10 +7,12 @@
 //
 // Two such claims exist and both are checked here against real build output:
 //
-//   1. EngineClient.spawn() resolves a Worker URL from a plain string literal.
+//   1. The opt-in spawnEngineClient() resolves a Worker URL from a plain literal.
 //      tsc emits that literal verbatim, so it names `./worker.js` — a file that
 //      exists only AFTER a build. Get it wrong and nothing throws: the URL
 //      resolves to a 404 and the Worker silently never boots.
+//      The root EngineClient module must not retain that URL, or bundlers emit an
+//      unused second Worker beside a consumer-owned `?worker` entry.
 //
 //   2. Every path in package.json `exports` points at a file that exists.
 //
@@ -32,24 +34,32 @@ describe("published artefact contract", () => {
 		expect(built).toBe(true);
 	});
 
-	it("EngineClient.spawn points at a Worker file that actually exists", () => {
-		const client = join(DIST, "engine", "client.js");
-		expect(existsSync(client)).toBe(true);
-		const source = readFileSync(client, "utf8");
+	it("keeps Worker spawning opt-in and points it at a real built Worker", () => {
+		const client = readFileSync(join(DIST, "engine", "client.js"), "utf8");
+		expect(client).not.toContain("new URL");
+		expect(client).not.toContain("spawnEngineClient");
+
+		const spawn = join(DIST, "engine", "spawn.js");
+		expect(existsSync(spawn)).toBe(true);
+		const source = readFileSync(spawn, "utf8");
 		const match = source.match(
 			/new URL\(\s*"(\.[^"]+)"\s*,\s*import\.meta\.url/,
 		);
-		expect(match, "spawn() must build its Worker URL from a literal").not.toBe(
-			null,
-		);
+		expect(
+			match,
+			"spawnEngineClient() must build its Worker URL from a literal",
+		).not.toBe(null);
 		const referenced = match?.[1] ?? "";
 		expect(referenced).toBe("./worker.js");
 		// The real assertion: resolve it the way the browser will.
-		const onDisk = resolve(dirname(client), referenced);
+		const onDisk = resolve(dirname(spawn), referenced);
 		expect(
 			existsSync(onDisk),
-			`spawn() references ${referenced}, which does not exist at ${onDisk}`,
+			`spawnEngineClient() references ${referenced}, which does not exist at ${onDisk}`,
 		).toBe(true);
+		expect(readFileSync(join(DIST, "engine", "spawn.d.ts"), "utf8")).toContain(
+			"spawnEngineClient",
+		);
 	});
 
 	it("ships the pinned SQLite vector Worker and minimal WASM assets", () => {
@@ -134,6 +144,17 @@ describe("published artefact contract", () => {
 			const onDisk = join(ROOT, target);
 			expect(existsSync(onDisk), `exports -> ${target} is missing`).toBe(true);
 		}
+	});
+
+	it("builds from an exact Git checkout under npm before dependency install", () => {
+		const pkg = JSON.parse(
+			readFileSync(join(ROOT, "package.json"), "utf8"),
+		) as {
+			files?: readonly string[];
+			scripts?: Record<string, string>;
+		};
+		expect(pkg.scripts?.prepare).toBe("npm run build");
+		expect(pkg.files).toEqual(["dist"]);
 	});
 
 	it("ships no node: import in anything a browser will load", () => {

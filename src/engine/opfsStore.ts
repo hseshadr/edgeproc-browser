@@ -6,8 +6,10 @@
 // always decompress → re-hash → compare (fail-closed). Store this verbatim so a
 // patch re-sync can prove only-changed-chunks were fetched.
 
+import { parseStoredPointer, samePointer } from "./activePointer.js";
 import { sha256Hex } from "./crypto.js";
 import { decompressAndVerify, IntegrityError } from "./integrity.js";
+import { translateStorageError } from "./storageError.js";
 import type { CacheStore, VersionPointer } from "./types.js";
 
 const CHUNK_DIR = "chunk";
@@ -28,12 +30,31 @@ export function selectHighestPointer(
 ): VersionPointer | null {
 	let highest: VersionPointer | null = null;
 	for (const candidate of candidates) {
-		if (
-			candidate === null ||
-			!Number.isSafeInteger(candidate.sequence) ||
-			candidate.sequence < 0
-		) {
+		if (candidate === null) continue;
+		const candidateHasSequence =
+			Number.isSafeInteger(candidate.sequence) && candidate.sequence >= 0;
+		const highestHasSequence =
+			highest !== null &&
+			Number.isSafeInteger(highest.sequence) &&
+			highest.sequence >= 0;
+		if (highest === null || (candidateHasSequence && !highestHasSequence)) {
+			highest = candidate;
 			continue;
+		}
+		if (!candidateHasSequence) {
+			if (!highestHasSequence && !samePointer(candidate, highest)) {
+				throw new IntegrityError("legacy durable active pointers disagree");
+			}
+			continue;
+		}
+		if (
+			highestHasSequence &&
+			candidate.sequence === highest.sequence &&
+			!samePointer(candidate, highest)
+		) {
+			throw new IntegrityError(
+				"durable active pointers disagree at the same sequence",
+			);
 		}
 		if (highest === null || candidate.sequence > highest.sequence) {
 			highest = candidate;
@@ -47,14 +68,12 @@ export function canPromotePointer(
 	current: VersionPointer | null,
 	incoming: VersionPointer,
 ): boolean {
-	if (current === null || incoming.sequence > current.sequence) return true;
+	if (current === null) return true;
+	if (!Number.isSafeInteger(current.sequence) || current.sequence < 0)
+		return true;
+	if (incoming.sequence > current.sequence) return true;
 	if (incoming.sequence < current.sequence) return false;
-	return (
-		incoming.manifest_hash === current.manifest_hash &&
-		incoming.version === current.version &&
-		(incoming.bundle_id ?? null) === (current.bundle_id ?? null) &&
-		(incoming.channel ?? null) === (current.channel ?? null)
-	);
+	return samePointer(current, incoming);
 }
 
 function readHandle(
@@ -70,15 +89,6 @@ function readHandle(
 	const buffer = new Uint8Array(size);
 	handle.read(buffer, { at: 0 });
 	return buffer;
-}
-
-function writeHandle(
-	handle: FileSystemSyncAccessHandle,
-	data: Uint8Array,
-): void {
-	handle.truncate(0);
-	handle.write(data, { at: 0 });
-	handle.flush();
 }
 
 export class OpfsCacheStore implements CacheStore {
@@ -108,8 +118,15 @@ export class OpfsCacheStore implements CacheStore {
 
 	public async hasChunk(chunkHash: string): Promise<boolean> {
 		try {
-			await this.#chunkDir.getFileHandle(chunkHash);
-			return true;
+			const file = await this.#chunkDir.getFileHandle(chunkHash);
+			const handle = await file.createSyncAccessHandle();
+			try {
+				if (handle.getSize() > 0) return true;
+			} finally {
+				handle.close();
+			}
+			await this.evict(this.#chunkDir, chunkHash);
+			return false;
 		} catch {
 			return false;
 		}
@@ -195,7 +212,7 @@ export class OpfsCacheStore implements CacheStore {
 
 	public async promote(pointer: VersionPointer): Promise<void> {
 		await this.withMutationLock(async () => {
-			const current = await this.readSlotPointers();
+			const current = await this.readDurablePointers();
 			const highest = selectHighestPointer(current.map((item) => item.pointer));
 			if (!canPromotePointer(highest, pointer)) {
 				throw new Error(
@@ -203,7 +220,10 @@ export class OpfsCacheStore implements CacheStore {
 				);
 			}
 			const activeSlot = current.find(
-				(item) => item.pointer?.sequence === highest?.sequence,
+				(item) =>
+					item.name !== ACTIVE_FILE &&
+					highest !== null &&
+					samePointer(item.pointer, highest),
 			);
 			const target =
 				activeSlot?.name === ACTIVE_SLOTS[0]
@@ -217,30 +237,70 @@ export class OpfsCacheStore implements CacheStore {
 		});
 	}
 
+	public async clearActiveIf(expected: VersionPointer): Promise<boolean> {
+		return this.withMutationLock(async () => {
+			const current = selectHighestPointer(
+				await Promise.all(
+					[ACTIVE_FILE, ...ACTIVE_SLOTS].map((name) => this.readPointer(name)),
+				),
+			);
+			if (!samePointer(current, expected)) return false;
+			await Promise.all(
+				[ACTIVE_FILE, ...ACTIVE_SLOTS].map((name) =>
+					this.evict(this.#root, name),
+				),
+			);
+			return true;
+		});
+	}
+
+	public async pruneInactive(): Promise<void> {
+		const active = await this.readActive();
+		if (active === null) return;
+		let manifest: IndexManifestShape;
+		try {
+			manifest = JSON.parse(
+				DECODER.decode(await this.getManifest(active.manifest_hash)),
+			) as IndexManifestShape;
+		} catch {
+			return;
+		}
+		if (!Array.isArray(manifest.files)) return;
+		const chunks = activeChunkHashes(manifest.files);
+		if (chunks === null) return;
+		await this.removeExcept(this.#chunkDir, chunks);
+		await this.removeExcept(this.#manifestDir, new Set([active.manifest_hash]));
+	}
+
+	public async clear(): Promise<void> {
+		await this.withMutationLock(async () => {
+			await this.removeExcept(this.#chunkDir, new Set());
+			await this.removeExcept(this.#manifestDir, new Set());
+			await Promise.all(
+				[ACTIVE_FILE, ...ACTIVE_SLOTS].map((name) =>
+					this.evict(this.#root, name),
+				),
+			);
+		});
+	}
+
 	private async readPointer(name: string): Promise<VersionPointer | null> {
 		try {
 			const raw = await this.readFile(this.#root, name, MAX_ACTIVE_BYTES);
-			const value: unknown = JSON.parse(DECODER.decode(raw));
-			if (typeof value !== "object" || value === null || Array.isArray(value)) {
-				return null;
-			}
-			const pointer = value as VersionPointer;
-			return Number.isSafeInteger(pointer.sequence) && pointer.sequence >= 0
-				? pointer
-				: null;
+			return parseStoredPointer(JSON.parse(DECODER.decode(raw)) as unknown);
 		} catch {
 			return null;
 		}
 	}
 
-	private async readSlotPointers(): Promise<
+	private async readDurablePointers(): Promise<
 		ReadonlyArray<{
 			readonly name: string;
 			readonly pointer: VersionPointer | null;
 		}>
 	> {
 		return Promise.all(
-			ACTIVE_SLOTS.map(async (name) => ({
+			[ACTIVE_FILE, ...ACTIVE_SLOTS].map(async (name) => ({
 				name,
 				pointer: await this.readPointer(name),
 			})),
@@ -274,12 +334,36 @@ export class OpfsCacheStore implements CacheStore {
 		name: string,
 		data: Uint8Array,
 	): Promise<void> {
-		const fileHandle = await dir.getFileHandle(name, { create: true });
-		const handle = await fileHandle.createSyncAccessHandle();
+		let existed = true;
+		let fileHandle: FileSystemFileHandle;
 		try {
-			writeHandle(handle, data);
+			fileHandle = await dir.getFileHandle(name);
+		} catch {
+			existed = false;
+			fileHandle = await dir.getFileHandle(name, { create: true });
+		}
+		let handle: FileSystemSyncAccessHandle | undefined;
+		let mutationStarted = false;
+		try {
+			handle = await fileHandle.createSyncAccessHandle();
+			handle.truncate(0);
+			mutationStarted = true;
+			handle.write(data, { at: 0 });
+			handle.flush();
+		} catch (error) {
+			if (!existed || mutationStarted) await this.evict(dir, name);
+			throw translateStorageError(error);
 		} finally {
-			handle.close();
+			handle?.close();
+		}
+	}
+
+	private async removeExcept(
+		dir: FileSystemDirectoryHandle,
+		keep: ReadonlySet<string>,
+	): Promise<void> {
+		for await (const [name] of dir.entries()) {
+			if (!keep.has(name)) await this.evict(dir, name);
 		}
 	}
 
@@ -296,4 +380,27 @@ export class OpfsCacheStore implements CacheStore {
 			handle.close();
 		}
 	}
+}
+
+interface IndexManifestShape {
+	readonly files?: ReadonlyArray<unknown>;
+}
+
+function activeChunkHashes(files: ReadonlyArray<unknown>): Set<string> | null {
+	const hashes = new Set<string>();
+	for (const file of files) {
+		if (typeof file !== "object" || file === null || Array.isArray(file))
+			return null;
+		const chunks = (file as { chunks?: unknown }).chunks;
+		if (!Array.isArray(chunks)) return null;
+		for (const chunk of chunks) {
+			if (typeof chunk !== "object" || chunk === null || Array.isArray(chunk))
+				return null;
+			const hash = (chunk as { hash?: unknown }).hash;
+			if (typeof hash !== "string" || !/^[0-9a-f]{64}$/u.test(hash))
+				return null;
+			hashes.add(hash);
+		}
+	}
+	return hashes;
 }
