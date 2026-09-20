@@ -15,7 +15,8 @@
 //   2. Every path in package.json `exports` points at a file that exists.
 //
 // This is why the gate runs `build` BEFORE `test`.
-import { existsSync, readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -49,6 +50,69 @@ describe("published artefact contract", () => {
 			existsSync(onDisk),
 			`spawn() references ${referenced}, which does not exist at ${onDisk}`,
 		).toBe(true);
+	});
+
+	it("ships the pinned SQLite vector Worker and minimal WASM assets", () => {
+		const client = join(DIST, "vector", "sqlite", "client.js");
+		const worker = join(DIST, "vector", "sqlite", "worker.js");
+		const assets = join(DIST, "vector", "sqlite", "assets");
+		expect(readFileSync(client, "utf8")).toContain(
+			'new URL("./worker.js", import.meta.url)',
+		);
+		expect(existsSync(worker)).toBe(true);
+		expect(readFileSync(worker, "utf8")).toContain(
+			'import sqlite3InitModule from "./assets/sqlite3.mjs"',
+		);
+
+		const expected = [
+			{
+				file: "sqlite3.mjs",
+				bytes: 809_712,
+				sha256:
+					"b96e0c4faa11f7220e4916788208302944bd995ba79d01c9f2ba726280b0fbc3",
+			},
+			{
+				file: "sqlite3.wasm",
+				bytes: 934_257,
+				sha256:
+					"a847545f7c58e1bdf9074cda354cfbd992c7edadf67cf4011e76297317c2565a",
+			},
+		] as const;
+		for (const artifact of expected) {
+			const path = join(assets, artifact.file);
+			expect(statSync(path).size).toBe(artifact.bytes);
+			expect(
+				createHash("sha256").update(readFileSync(path)).digest("hex"),
+			).toBe(artifact.sha256);
+		}
+		for (const notice of [
+			"LICENSE.sqlite.md",
+			"LICENSE.sqlite-vector.md",
+			"THIRD_PARTY_NOTICES.md",
+		]) {
+			expect(existsSync(join(assets, notice))).toBe(true);
+		}
+	});
+
+	it("keeps the SQLite WASM lazy and free of network imports", async () => {
+		for (const entrypoint of [
+			join(DIST, "index.js"),
+			join(DIST, "vector", "index.js"),
+		]) {
+			const source = readFileSync(entrypoint, "utf8");
+			expect(source).not.toMatch(/sqlite3|vector\/sqlite|sqlite-vector/i);
+		}
+
+		const wasm = readFileSync(
+			join(DIST, "vector", "sqlite", "assets", "sqlite3.wasm"),
+		);
+		const module = await WebAssembly.compile(wasm);
+		const imports = WebAssembly.Module.imports(module).map(
+			(entry) => `${entry.module}:${entry.name}`,
+		);
+		expect(imports).not.toContainEqual(
+			expect.stringMatching(/socket|sock_|websocket|fetch|http/i),
+		);
 	});
 
 	it("every package.json export resolves to a real file", () => {

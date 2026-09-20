@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A replaceable browser vector contract and opt-in SQLite/OPFS adapter.** The
+  dependency-free `FlatVectorIndex` and the Worker-hosted SQLite adapter share
+  one conformance suite. The persistent adapter statically links only SQLite
+  3.53.4 and Apache-2.0 sqlite-vector 1.1.2—no FAISS and no SQLiteAI
+  sync/memory/network bundle—uses exact FLOAT32 cosine search, transactional
+  batches, parameterized AND filters, deterministic ID tie breaks, and explicit
+  disposal. Pinned artifact hashes, a digest-pinned Docker rebuild, and packaged
+  third-party notices make the WASM auditable. A real Chromium test proves OPFS
+  persistence across Worker restart and zero external requests.
+
 - **A publish preflight that makes a stale `dist/` unpublishable.**
   `prepublishOnly` now runs `scripts/preflight-publish.mjs` and then the full
   gate. The script refuses outright — before anything is built or packed — if the

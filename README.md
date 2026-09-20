@@ -4,7 +4,9 @@
 
 Fetch under a byte cap. Verify an ed25519 signature over canonical JSON. Bound and verify every zstd decompression. Store chunks content-addressed in OPFS. Reassemble files. Do all of it in a Web Worker, and — this is the part nobody else does — let the main thread *observe that Worker's network activity*, so "no backend calls" is a measurement instead of a promise.
 
-Zero framework dependencies. Two runtime deps (`@noble/ed25519`, `@hpcc-js/wasm-zstd`). ~2,200 lines.
+Zero framework dependencies. Two runtime deps (`@noble/ed25519`,
+`@hpcc-js/wasm-zstd`), plus an opt-in, self-hosted SQLite vector runtime under
+the separate `@edgeproc/browser/vector/sqlite` export.
 
 ## TL;DR
 
@@ -79,6 +81,39 @@ channel.onmessage = (event) => {
 };
 ```
 
+## Semantic similarity without FAISS
+
+The vector API is an adapter seam, not a ranking framework. Use the tiny exact
+in-memory adapter for bounded datasets, or opt into SQLite + OPFS when the index
+must survive a reload:
+
+```ts
+import { createSqliteVectorIndex } from "@edgeproc/browser/vector/sqlite";
+
+const index = await createSqliteVectorIndex({
+  name: "my-catalog",
+  dimension: 384,
+});
+
+await index.insert([{ id: "sku-1", vector: embedding, metadata: { tenant: "a" } }]);
+const nearest = await index.search(query, 10, { tenant: "a" });
+await index.dispose();
+```
+
+This path uses SQLite 3.53.4 plus only the Apache-2.0 sqlite-vector 1.1.2
+extension, statically linked into a 934,257-byte WASM file. It does **not** ship
+FAISS, SQLiteAI sync/memory/network modules, an embedding model, or a backend.
+Search is exact FLOAT32 cosine distance; filters are parameterized equality
+predicates ANDed together. SQLite runs in a dedicated Worker and persistent mode
+uses the OPFS SAH-pool VFS. One index is single-owner: concurrent tabs receive
+an actionable open error after a bounded retry, rather than silently sharing a
+synchronous access handle.
+
+For ephemeral or small catalogs, import `FlatVectorIndex` from
+`@edgeproc/browser/vector`; it has the same contract and no WASM startup cost.
+The build recipe, exact source pins, hashes, and licenses live beside the
+packaged assets in `src/vector/sqlite/assets/README.md`.
+
 ## The invariant: fail closed
 
 An unverifiable byte is not a degraded byte, it is a rejected one. Every path that cannot prove integrity throws rather than returning something a caller might use:
@@ -100,7 +135,9 @@ A network outage is the *only* condition that may serve cache, and it is a disti
 
 This package is the substrate, not a product. It knows how to get bytes into a tab intact and nothing about what they mean. Kept out on purpose:
 
-- **Search / ranking / recommendation.** That is [edge-reco](https://github.com/hseshadr/edge-reco)'s product, and it lives there.
+- **Domain ranking / recommendation.** The generic vector seam lives here;
+  product features and ranking policy remain in
+  [edge-reco](https://github.com/hseshadr/edge-reco).
 - **Sanctions screening / name matching.** That is [aml-filter](https://github.com/hseshadr/aml-filter)'s, and it lives there.
 - **The composition root.** Whatever wires this substrate to *your* domain is yours to own — that is the seam that keeps this package a dependency rather than a framework.
 - **Embedding models.** `@huggingface/transformers` is a heavyweight, model-specific dependency; it does not belong in a package this low.
@@ -113,6 +150,10 @@ Stated plainly, because an unstated gap is a lie by omission:
 
 - **`opfsStore.ts` is not covered by this package's test suite** (57% of statements, and excluded from the coverage gate). jsdom has no OPFS implementation, so sync-access-handle contention, the nav-release race, and partial-write recovery are **unproven here**. They are exercised downstream against a real browser. This package needs its own real-browser tier before that module can carry a coverage claim.
 - **`worker.ts` is excluded too**, for a different reason: it is a top-level side effect, so importing it under jsdom would run it, not test it.
+- **The SQLite vector Worker is excluded from jsdom coverage for the same
+  reason.** Its real Chromium test opens OPFS, verifies extension provenance,
+  queries, disposes, reopens in a new Worker, and proves the records persisted
+  without any external request.
 - Everything else clears the project floor — 95.92% statements, 92.40% branches, 100% functions, 96.64% lines.
 
 ## Consuming this package
@@ -136,6 +177,7 @@ This code was extracted from [edge-reco](https://github.com/hseshadr/edge-reco),
 ```bash
 pnpm install
 pnpm gate      # lint -> typecheck -> build -> test (exactly what CI runs)
+pnpm test:browser # real Chromium: sqlite-vector + Worker + OPFS reopen
 ```
 
 The build runs *before* the tests on purpose: `files: ["dist"]` means consumers get only build output, so `test/dist-contract.test.ts` inspects the real artefact. A claim that holds in `src/` and fails in `dist/` is invisible to every source-level test.
