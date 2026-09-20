@@ -1,10 +1,9 @@
 #!/usr/bin/env node
 // The guard that stands between `npm publish` and unauditable bytes.
 //
-// `files: ["dist"]` means the tarball IS dist/, and dist/ is gitignored — it is
-// whatever the last build happened to leave on disk. Nothing in npm reconciles
-// that with the commit you are publishing, so without this script a publish
-// ships bytes that may match no commit anyone can fetch. That is not a
+// `files: ["dist"]` means the tarball IS dist/. The repository now commits a
+// deterministic copy for exact-Git clients, but publishing must still rebuild
+// from clean source rather than trust whatever happens to be on disk. That is not a
 // hypothetical: on 2026-08-08 dist/engine/client.js was rebuilt at 05:58:53,
 // three minutes AFTER f3607eb added `#releaseWorker()` and two days after the
 // only commit on main. The compiled output carried a fix `main` did not have.
@@ -14,7 +13,7 @@
 // describing something other than a fetchable commit:
 //
 //   1. Not a git work tree      — there is no commit to be the source of truth.
-//   2. Dirty tree               — the build's inputs are not any commit's contents.
+//   2. Dirty tree               — source or committed output differs from HEAD.
 //   3. HEAD not proven remote   — the commit is neither on a remote-tracking
 //                                 branch nor the exact target of a tag on origin.
 //

@@ -7,7 +7,7 @@ import type {
 	VectorIndexOptions,
 	VectorRecord,
 	VectorStats,
-} from "../types";
+} from "../types.js";
 
 export type SqliteValue = string | number | null | Uint8Array;
 

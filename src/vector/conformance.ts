@@ -3,7 +3,7 @@ import type {
 	VectorIndex,
 	VectorIndexFactory,
 	VectorRecord,
-} from "./types";
+} from "./types.js";
 
 const DIMENSION = 3;
 const QUERY = new Float32Array([1, 0, 0]);

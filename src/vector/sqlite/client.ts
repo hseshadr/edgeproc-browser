@@ -5,13 +5,13 @@ import type {
 	VectorIndexCapabilities,
 	VectorRecord,
 	VectorStats,
-} from "../types";
-import type { SqliteVectorRuntimeInfo } from "./database";
+} from "../types.js";
+import type { SqliteVectorRuntimeInfo } from "./database.js";
 import type {
 	SqliteVectorWorkerOptions,
 	SqliteVectorWorkerRequest,
 	SqliteVectorWorkerResponse,
-} from "./protocol";
+} from "./protocol.js";
 
 interface WorkerLike {
 	postMessage(message: SqliteVectorWorkerRequest): void;

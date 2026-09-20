@@ -4,7 +4,12 @@ import { sha256Hex } from "./crypto.js";
 import { NetworkError } from "./fetchBytes.js";
 import { IntegrityError } from "./integrity.js";
 import { MemoryCacheStore } from "./memoryStore.js";
-import { materializeFile, RollbackError, syncIndex } from "./sync.js";
+import {
+	MAX_CHUNK_RETRY_BUDGET_MS,
+	materializeFile,
+	RollbackError,
+	syncIndex,
+} from "./sync.js";
 import type {
 	FetchBytes,
 	FileEntry,
@@ -504,6 +509,129 @@ describe("anti-rollback fails closed", () => {
 });
 
 describe("bounded sync resources", () => {
+	it("absorbs a transient chunk outage within a bounded retry budget", async () => {
+		const bytes = ENCODER.encode("retry me");
+		const hash = await sha256Hex(bytes);
+		const zstd = await Zstd.load();
+		const origin = await originFor(
+			emptyManifest({
+				files: [
+					{
+						path: "retry.bin",
+						file_type: null,
+						size: bytes.byteLength,
+						file_sha256: hash,
+						chunks: [{ hash, size: bytes.byteLength }],
+					},
+				],
+			}),
+			new Map([[hash, zstd.compress(bytes)]]),
+		);
+		let attempts = 0;
+		const delays: number[] = [];
+		const result = await syncIndex({
+			baseUrl: "/o",
+			store: new MemoryCacheStore(),
+			verify: passVerify,
+			fetchBytes: (url, options) => {
+				if (!url.includes("/chunk/")) return origin.fetchBytes(url, options);
+				attempts += 1;
+				return attempts < 6
+					? Promise.reject(new NetworkError("temporary outage"))
+					: origin.fetchBytes(url, options);
+			},
+			sleep: (milliseconds) => {
+				delays.push(milliseconds);
+				return Promise.resolve();
+			},
+		});
+
+		expect(result.chunksFetched).toBe(1);
+		expect(attempts).toBe(6);
+		expect(delays).toHaveLength(5);
+		const totalDelay = delays.reduce((total, delay) => total + delay, 0);
+		expect(totalDelay).toBeGreaterThanOrEqual(7_750);
+		expect(totalDelay).toBeLessThanOrEqual(MAX_CHUNK_RETRY_BUDGET_MS);
+	});
+
+	it("stops after six network attempts", async () => {
+		const bytes = ENCODER.encode("stay offline");
+		const hash = await sha256Hex(bytes);
+		const origin = await originFor(
+			emptyManifest({
+				files: [
+					{
+						path: "offline.bin",
+						file_type: null,
+						size: bytes.byteLength,
+						file_sha256: hash,
+						chunks: [{ hash, size: bytes.byteLength }],
+					},
+				],
+			}),
+		);
+		let attempts = 0;
+		let waits = 0;
+
+		await expect(
+			syncIndex({
+				baseUrl: "/o",
+				store: new MemoryCacheStore(),
+				verify: passVerify,
+				fetchBytes: (url, options) => {
+					if (!url.includes("/chunk/")) return origin.fetchBytes(url, options);
+					attempts += 1;
+					return Promise.reject(new NetworkError("still offline"));
+				},
+				sleep: () => {
+					waits += 1;
+					return Promise.resolve();
+				},
+			}),
+		).rejects.toThrow("still offline");
+		expect(attempts).toBe(6);
+		expect(waits).toBe(5);
+	});
+
+	it("never retries a non-network chunk failure", async () => {
+		const bytes = ENCODER.encode("do not retry integrity");
+		const hash = await sha256Hex(bytes);
+		const origin = await originFor(
+			emptyManifest({
+				files: [
+					{
+						path: "integrity.bin",
+						file_type: null,
+						size: bytes.byteLength,
+						file_sha256: hash,
+						chunks: [{ hash, size: bytes.byteLength }],
+					},
+				],
+			}),
+		);
+		let attempts = 0;
+		const delays: number[] = [];
+
+		await expect(
+			syncIndex({
+				baseUrl: "/o",
+				store: new MemoryCacheStore(),
+				verify: passVerify,
+				fetchBytes: (url, options) => {
+					if (!url.includes("/chunk/")) return origin.fetchBytes(url, options);
+					attempts += 1;
+					return Promise.reject(new IntegrityError("bad immutable bytes"));
+				},
+				sleep: (milliseconds) => {
+					delays.push(milliseconds);
+					return Promise.resolve();
+				},
+			}),
+		).rejects.toThrow("bad immutable bytes");
+		expect(attempts).toBe(1);
+		expect(delays).toEqual([]);
+	});
+
 	it("uses parallel chunk workers without exceeding eight in flight", async () => {
 		const zstd = await Zstd.load();
 		const chunks = new Map<string, Uint8Array>();

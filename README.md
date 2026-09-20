@@ -81,6 +81,10 @@ promotes only the signed pointer and manifest, so an application can inspect a
 catalog first and fetch a selected directory later. Every verified chunk emits
 progress and re-arms the client's idle watchdog.
 
+Chunk transport failures classified as `NetworkError` receive six bounded
+attempts with exponential jitter (9 seconds maximum backoff). Integrity,
+signature, storage, and rollback failures are verdicts and are never retried.
+
 To count what a Worker actually fetched, listen on the sentinel channel:
 
 ```ts
@@ -206,9 +210,11 @@ const client = spawnEngineClient({ idleTimeoutMs: 60_000 });
 `test/vite-consumer.test.ts` builds the recommended public API through Vite and
 proves that exactly one engine Worker asset is emitted.
 
-Exact Git-SHA installs are supported before the npm bootstrap: npm runs
-`prepare: npm run build`, while registry tarballs continue to contain only
-`dist/`.
+Exact Git-SHA installs are supported before the npm bootstrap. Deterministic
+`dist/` output is committed so clients such as Bun that do not run Git-package
+lifecycle scripts still work; npm and pnpm also rebuild it through
+`prepare: npm run build`. The gate refuses when a clean build differs from the
+committed output, while registry tarballs continue to contain only `dist/`.
 
 ## Architecture
 
@@ -230,7 +236,7 @@ pnpm gate      # lint -> typecheck -> build -> test (exactly what CI runs)
 pnpm test:browser # real Chromium: sqlite-vector + Worker + OPFS reopen
 ```
 
-The build runs *before* the tests on purpose: `files: ["dist"]` means consumers get only build output, so `test/dist-contract.test.ts` inspects the real artefact. A claim that holds in `src/` and fails in `dist/` is invisible to every source-level test.
+The build runs *before* the tests on purpose: `files: ["dist"]` means consumers get only build output, so the gate verifies the committed artifact is fresh and `test/dist-contract.test.ts` loads its public exports with native Node ESM. A claim that holds in `src/` and fails in `dist/` is invisible to every source-level test.
 
 ## License
 

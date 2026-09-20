@@ -46,6 +46,8 @@ export interface SyncArgs {
 	readonly wantedPaths?: ReadonlyArray<string>;
 	/** Observer only: exceptions are isolated from the integrity state machine. */
 	readonly onProgress?: (progress: SyncProgress) => void;
+	/** Test seam for bounded per-chunk network retry backoff. */
+	readonly sleep?: (milliseconds: number) => Promise<void>;
 	/** Tests/operators may only LOWER the aggregate cap, never raise the release
 	 * ceiling. This keeps failure paths cheap to exercise without weakening prod. */
 	readonly limits?: { readonly maxTotalFetchBytes?: number };
@@ -67,6 +69,16 @@ const MAX_DISTINCT_CHUNKS = 4096;
 const MAX_FILE_BYTES = 256 * 1024 * 1024;
 const MAX_TOTAL_UNCOMPRESSED_BYTES = 512 * 1024 * 1024;
 const MAX_CONCURRENT_CHUNK_FETCHES = 8;
+const CHUNK_FETCH_ATTEMPTS = 6;
+const CHUNK_RETRY_BASE_DELAY_MS = 250;
+
+/** Maximum silent backoff before one chunk fetch is declared unreachable. */
+export const MAX_CHUNK_RETRY_BUDGET_MS =
+	CHUNK_RETRY_BASE_DELAY_MS * (2 ** (CHUNK_FETCH_ATTEMPTS - 1) - 1) +
+	CHUNK_RETRY_BASE_DELAY_MS * (CHUNK_FETCH_ATTEMPTS - 1);
+
+const realSleep = (milliseconds: number): Promise<void> =>
+	new Promise((resolve) => setTimeout(resolve, milliseconds));
 
 export class SyncCapError extends IntegrityError {
 	public constructor(message: string) {
@@ -525,6 +537,28 @@ function totalFetchLimit(args: SyncArgs): number {
 	return Math.min(requested, MAX_TOTAL_FETCH_BYTES);
 }
 
+async function fetchChunkWithRetry(
+	url: string,
+	fetchBytes: FetchBytes,
+	maxBytes: number,
+	sleep: (milliseconds: number) => Promise<void>,
+): Promise<Uint8Array> {
+	let lastError: NetworkError | undefined;
+	for (let attempt = 0; attempt < CHUNK_FETCH_ATTEMPTS; attempt += 1) {
+		try {
+			return await fetchCapped(fetchBytes, url, maxBytes);
+		} catch (error) {
+			if (!(error instanceof NetworkError)) throw error;
+			lastError = error;
+			if (attempt + 1 < CHUNK_FETCH_ATTEMPTS) {
+				const backoff = CHUNK_RETRY_BASE_DELAY_MS * 2 ** attempt;
+				await sleep(backoff + Math.random() * CHUNK_RETRY_BASE_DELAY_MS);
+			}
+		}
+	}
+	throw lastError ?? new NetworkError(`chunk ${url} is unreachable`);
+}
+
 async function fetchMissing(
 	baseUrl: string,
 	missing: ReadonlyArray<ChunkRef>,
@@ -532,6 +566,7 @@ async function fetchMissing(
 	store: CacheStore,
 	maxTotalBytes: number,
 	onChunk: (completed: number, total: number, bytesFetched: number) => void,
+	sleep: (milliseconds: number) => Promise<void>,
 ): Promise<number> {
 	let next = 0;
 	let total = 0;
@@ -571,10 +606,11 @@ async function fetchMissing(
 			}
 			let consumed = 0;
 			try {
-				const compressed = await fetchCapped(
-					fetchBytes,
+				const compressed = await fetchChunkWithRetry(
 					`${baseUrl}/chunk/${ref.hash}`,
+					fetchBytes,
 					reservation,
+					sleep,
 				);
 				if (failure !== undefined) return;
 				consumed = compressed.byteLength;
@@ -739,6 +775,7 @@ export async function syncIndex(args: SyncArgs): Promise<SyncResult> {
 					totalChunks,
 					bytesFetched: fetchedBytes,
 				}),
+			args.sleep ?? realSleep,
 		);
 		await verifyReassembly(files, store);
 		await store.promote(pointer);

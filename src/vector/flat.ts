@@ -7,7 +7,7 @@ import type {
 	VectorIndexOptions,
 	VectorRecord,
 	VectorStats,
-} from "./types";
+} from "./types.js";
 
 interface StoredRecord {
 	readonly id: string;

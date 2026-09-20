@@ -26,8 +26,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   computes exact cosine similarity with deterministic ties, exposes defensive
   row copies, and fails closed after zeroizing disposal.
 
-- **Reproducible exact-Git-SHA installs.** `prepare` uses the package-manager
-  neutral `npm run build`; registry packages remain limited to `dist/`.
+- **Reproducible exact-Git-SHA installs across npm, pnpm, and Bun.**
+  Deterministic `dist/` output is committed for clients that skip Git-package
+  lifecycle scripts; `prepare` still rebuilds it where supported, and the gate
+  rejects any source/artifact drift. Registry packages remain limited to
+  `dist/`. Native Node ESM loading of every side-effect-free public export is a
+  distribution contract, including explicit `.js` vector imports.
 
 - **A replaceable browser vector contract and opt-in SQLite/OPFS adapter.** The
   dependency-free `FlatVectorIndex` and the Worker-hosted SQLite adapter share
@@ -56,6 +60,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   accept case against real throwaway repos.
 
 ### Fixed
+
+- **Transient chunk outages no longer abort a cold sync immediately.** Only
+  `NetworkError` receives six attempts with exponential jitter and a hard
+  9-second backoff ceiling. Integrity, signature, storage, and rollback
+  failures remain fail-closed with no retry.
 
 - **CONTRIBUTING claimed things that were not true of this package.** It said
   coverage was enforced at 100% (`vitest.config.ts` enforces 90/90/90/85) because

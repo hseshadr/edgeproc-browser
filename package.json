@@ -75,8 +75,9 @@
 		"test:watch": "vitest",
 		"lint": "biome check .",
 		"lint:fix": "biome check --write .",
+		"verify:dist": "node scripts/verify-dist.mjs",
 		"demo": "npm run build && node examples/quickstart.mjs",
-		"gate": "npm run lint && npm run typecheck && npm run build && npm run test",
+		"gate": "npm run lint && npm run typecheck && npm run build && npm run verify:dist && npm run test",
 		"preflight": "node scripts/preflight-publish.mjs",
 		"prepublishOnly": "npm run preflight && npm run gate"
 	},

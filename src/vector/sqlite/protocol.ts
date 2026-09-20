@@ -1,5 +1,5 @@
-import type { Metadata, VectorIndexOptions, VectorRecord } from "../types";
-import type { SqliteVectorRuntimeInfo } from "./database";
+import type { Metadata, VectorIndexOptions, VectorRecord } from "../types.js";
+import type { SqliteVectorRuntimeInfo } from "./database.js";
 
 export type SqliteVectorPersistence = "memory" | "opfs";
 
