@@ -13,6 +13,9 @@
 		   every consumer of this package (a Vite browser app) resolves. See the
 		   README's "Consuming this package" note — it is not bare-Node ESM. */
 		"moduleResolution": "Bundler",
+		"paths": {
+			"@edgeproc/browser/vector/sqlite": ["./src/vector/sqlite/index.ts"]
+		},
 		"moduleDetection": "force",
 		"verbatimModuleSyntax": true,
 		"isolatedModules": true,
