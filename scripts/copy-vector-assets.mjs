@@ -1,4 +1,4 @@
-import { cp, mkdir } from "node:fs/promises";
+import { copyFile, mkdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -15,5 +15,5 @@ for (const file of [
 	"LICENSE.sqlite-vector.md",
 	"THIRD_PARTY_NOTICES.md",
 ]) {
-	await cp(join(source, file), join(destination, file));
+	await copyFile(join(source, file), join(destination, file));
 }
