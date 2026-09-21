@@ -19,6 +19,7 @@ const CAPABILITIES = Object.freeze({
 const TABLE = "edgeproc_vectors";
 const METADATA_TABLE = "edgeproc_vector_metadata";
 const CONFIG_TABLE = "edgeproc_vector_config";
+const SQLITE_MAX_BIND_PARAMETERS = 32_766;
 /** Exact FLOAT32 cosine index backed by SQLite plus sqlite-vector. */
 export class SqliteDatabaseVectorIndex {
     name;
@@ -76,6 +77,25 @@ export class SqliteDatabaseVectorIndex {
 			 ORDER BY scan.distance ASC, v.id COLLATE BINARY ASC
 			 LIMIT ?`, [vectorBytes(query), ...scoped.bind, limit]);
         return rows.map(decodeHit);
+    }
+    async searchByIds(query, ids) {
+        this.#assertOpen();
+        validateVector(query, this.dimension, "query");
+        const unique = uniqueIds(ids);
+        if (unique.length === 0) {
+            return [];
+        }
+        const hits = [];
+        for (const idsChunk of chunks(unique, SQLITE_MAX_BIND_PARAMETERS - 1)) {
+            const placeholders = idsChunk.map(() => "?").join(", ");
+            const rows = this.#database.selectObjects(`SELECT v.id AS id, scan.distance AS distance, v.metadata_json AS metadata_json
+				 FROM vector_full_scan('${TABLE}', 'embedding', ?) AS scan
+				 JOIN ${TABLE} AS v ON v.rowid = scan.rowid
+				 WHERE v.id IN (${placeholders})`, [vectorBytes(query), ...idsChunk]);
+            hits.push(...rows.map(decodeHit));
+        }
+        hits.sort((left, right) => left.distance - right.distance || compareCodeUnits(left.id, right.id));
+        return hits;
     }
     async delete(ids, filters) {
         this.#assertOpen();
@@ -219,8 +239,21 @@ function validateAndCopyRecord(record, dimension) {
     };
 }
 function validateId(id) {
-    if (id.length === 0) {
+    if (typeof id !== "string" || id.length === 0) {
         throw new TypeError("vector record id must not be empty");
+    }
+}
+function uniqueIds(ids) {
+    const unique = new Set();
+    for (const id of ids) {
+        validateId(id);
+        unique.add(id);
+    }
+    return [...unique];
+}
+function* chunks(values, size) {
+    for (let start = 0; start < values.length; start += size) {
+        yield values.slice(start, start + size);
     }
 }
 function validateVector(vector, dimension, at) {
@@ -314,5 +347,11 @@ function requireFiniteNumber(value, at) {
         throw new TypeError(`${at} was not a finite number`);
     }
     return value;
+}
+function compareCodeUnits(left, right) {
+    if (left === right) {
+        return 0;
+    }
+    return left < right ? -1 : 1;
 }
 //# sourceMappingURL=database.js.map

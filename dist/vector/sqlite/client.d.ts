@@ -23,6 +23,7 @@ export declare class SqliteVectorIndexClient implements SqliteWorkerVectorIndex 
     insert(records: ReadonlyArray<VectorRecord>): Promise<void>;
     read(id: string): Promise<VectorRecord | undefined>;
     search(query: Float32Array, limit: number, filters?: Metadata): Promise<ReadonlyArray<VectorHit>>;
+    searchByIds(query: Float32Array, ids: ReadonlyArray<string>): Promise<ReadonlyArray<VectorHit>>;
     delete(ids: ReadonlyArray<string>, filters?: Metadata): Promise<number>;
     deleteWhere(filters: Metadata): Promise<number>;
     clear(): Promise<number>;

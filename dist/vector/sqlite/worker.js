@@ -42,6 +42,8 @@ async function dispatch(request) {
             return current.read(request.recordId);
         case "search":
             return current.search(request.query, request.limit, request.filters);
+        case "search-by-ids":
+            return current.searchByIds(request.query, request.ids);
         case "delete":
             return current.delete(request.ids, request.filters);
         case "delete-where":

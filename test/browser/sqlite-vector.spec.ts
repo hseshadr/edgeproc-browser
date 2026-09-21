@@ -25,6 +25,7 @@ test("persists exact vector search in OPFS across a Worker restart", async ({
 			bundledExtensions: ["vector_version"],
 		},
 		firstNearest: "closest",
+		namedIds: ["closest", "far"],
 		deletedWhere: 1,
 		reopenedNearest: "closest",
 		reopenedCount: 1,

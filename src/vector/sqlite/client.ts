@@ -129,6 +129,18 @@ export class SqliteVectorIndexClient implements SqliteWorkerVectorIndex {
 		})) as ReadonlyArray<VectorHit>;
 	}
 
+	public async searchByIds(
+		query: Float32Array,
+		ids: ReadonlyArray<string>,
+	): Promise<ReadonlyArray<VectorHit>> {
+		await this.#ready;
+		return (await this.#request({
+			operation: "search-by-ids",
+			query,
+			ids,
+		})) as ReadonlyArray<VectorHit>;
+	}
+
 	public async delete(
 		ids: ReadonlyArray<string>,
 		filters?: Metadata,

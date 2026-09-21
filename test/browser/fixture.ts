@@ -6,6 +6,7 @@ import {
 export interface BrowserProof {
 	readonly runtime: SqliteVectorRuntimeInfo;
 	readonly firstNearest: string | undefined;
+	readonly namedIds: ReadonlyArray<string>;
 	readonly deletedWhere: number;
 	readonly reopenedNearest: string | undefined;
 	readonly reopenedCount: number;
@@ -43,6 +44,14 @@ window.runSqliteVectorProof = async (name): Promise<BrowserProof> => {
 			active: true,
 		})
 	)[0]?.id;
+	const namedIds = (
+		await first.searchByIds(new Float32Array([0.9, 0.1, 0]), [
+			"far",
+			"closest",
+			"missing",
+			"closest",
+		])
+	).map(({ id }) => id);
 	const deletedWhere = await first.deleteWhere({ active: false });
 	await first.dispose();
 
@@ -65,6 +74,7 @@ window.runSqliteVectorProof = async (name): Promise<BrowserProof> => {
 	return {
 		runtime,
 		firstNearest,
+		namedIds,
 		deletedWhere,
 		reopenedNearest,
 		reopenedCount,

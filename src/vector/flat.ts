@@ -92,6 +92,34 @@ export class FlatVectorIndex implements VectorIndex {
 		return hits.slice(0, limit);
 	}
 
+	public async searchByIds(
+		query: Float32Array,
+		ids: ReadonlyArray<string>,
+	): Promise<ReadonlyArray<VectorHit>> {
+		this.#assertOpen();
+		this.#assertVector(query, "query");
+		const unique = uniqueIds(ids);
+		if (unique.length === 0) {
+			return [];
+		}
+		const queryNorm = l2Norm(query);
+		const hits: VectorHit[] = [];
+		for (const id of unique) {
+			const record = this.#records.get(id);
+			if (record !== undefined) {
+				hits.push({
+					id: record.id,
+					distance: cosineDistance(query, queryNorm, record),
+					metadata: { ...record.metadata },
+				});
+			}
+		}
+		hits.sort(
+			(a, b) => a.distance - b.distance || compareCodeUnits(a.id, b.id),
+		);
+		return hits;
+	}
+
 	public async delete(
 		ids: ReadonlyArray<string>,
 		filters?: Metadata,
@@ -228,6 +256,17 @@ function validateRequiredMetadata(metadata: Metadata, at: string): void {
 	if (Object.keys(metadata).length === 0) {
 		throw new TypeError(`${at} must contain at least one filter`);
 	}
+}
+
+function uniqueIds(ids: ReadonlyArray<string>): ReadonlyArray<string> {
+	const unique = new Set<string>();
+	for (const id of ids) {
+		if (typeof id !== "string" || id.length === 0) {
+			throw new TypeError("vector record id must not be empty");
+		}
+		unique.add(id);
+	}
+	return [...unique];
 }
 
 function matches(metadata: Metadata, filters: Metadata | undefined): boolean {

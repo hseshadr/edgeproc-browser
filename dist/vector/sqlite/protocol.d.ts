@@ -24,6 +24,11 @@ export type SqliteVectorWorkerRequest = {
     readonly filters?: Metadata;
 } | {
     readonly id: number;
+    readonly operation: "search-by-ids";
+    readonly query: Float32Array;
+    readonly ids: ReadonlyArray<string>;
+} | {
+    readonly id: number;
     readonly operation: "delete";
     readonly ids: ReadonlyArray<string>;
     readonly filters?: Metadata;
