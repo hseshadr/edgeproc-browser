@@ -1,4 +1,4 @@
-export type EngineErrorCode = "integrity" | "rollback" | "network" | "storage" | "internal";
+export type EngineErrorCode = "integrity" | "rollback" | "network" | "lock" | "storage" | "internal";
 export interface EngineErrorDetail {
     readonly code: EngineErrorCode;
     readonly message: string;

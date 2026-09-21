@@ -21,6 +21,9 @@ export function classifyEngineError(error) {
     }
     if (error instanceof NetworkError)
         return { code: "network", message };
+    if (/timed out acquiring (?:an? )?opfs mutation lock/iu.test(message)) {
+        return { code: "lock", message };
+    }
     if (error instanceof StorageQuotaError ||
         /storage|indexeddb|opfs|quota/iu.test(message)) {
         return { code: "storage", message };
