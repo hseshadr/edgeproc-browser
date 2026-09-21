@@ -8,6 +8,7 @@ export type EngineErrorCode =
 	| "integrity"
 	| "rollback"
 	| "network"
+	| "lock"
 	| "storage"
 	| "internal";
 
@@ -34,6 +35,9 @@ export function classifyEngineError(error: unknown): EngineErrorDetail {
 		return { code: "integrity", message };
 	}
 	if (error instanceof NetworkError) return { code: "network", message };
+	if (/timed out acquiring (?:an? )?opfs mutation lock/iu.test(message)) {
+		return { code: "lock", message };
+	}
 	if (
 		error instanceof StorageQuotaError ||
 		/storage|indexeddb|opfs|quota/iu.test(message)

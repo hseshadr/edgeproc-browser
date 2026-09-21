@@ -13,6 +13,7 @@ describe("typed Worker error contract", () => {
 		[new IntegrityError("bad hash"), "integrity"],
 		[new NetworkError("offline"), "network"],
 		[new StorageQuotaError(), "storage"],
+		[new Error("timed out acquiring OPFS mutation lock"), "lock"],
 		[new Error("OPFS initialization failed"), "storage"],
 		[new Error("surprise"), "internal"],
 	] as const)("classifies %s", (error, code) => {
