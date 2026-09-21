@@ -25,8 +25,10 @@ test("persists exact vector search in OPFS across a Worker restart", async ({
 			bundledExtensions: ["vector_version"],
 		},
 		firstNearest: "closest",
+		deletedWhere: 1,
 		reopenedNearest: "closest",
-		reopenedCount: 2,
+		reopenedCount: 1,
+		cleared: 1,
 	});
 	expect(externalRequests).toEqual([]);
 });

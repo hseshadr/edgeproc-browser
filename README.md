@@ -116,6 +116,8 @@ const index = await createSqliteVectorIndex({
 
 await index.insert([{ id: "sku-1", vector: embedding, metadata: { tenant: "a" } }]);
 const nearest = await index.search(query, 10, { tenant: "a" });
+await index.deleteWhere({ tenant: "a" }); // requires a non-empty metadata scope
+await index.clear(); // exact count returned; removes every local vector
 await index.dispose();
 ```
 
@@ -136,6 +138,19 @@ exact cosine similarity without another dependency, preserves producer order on
 ties, and zeroizes its owned storage on disposal.
 The build recipe, exact source pins, hashes, and licenses live beside the
 packaged assets in `src/vector/sqlite/assets/README.md`.
+
+For a Node recall or evaluation job that must use the same pinned SQLite and
+sqlite-vector runtime—not a JavaScript cosine fallback—use the explicit
+Node-only entrypoint. It is in-memory by design and never changes browser
+bundle behavior:
+
+```ts
+import { createNodeSqliteVectorIndex } from "@edgeproc/browser/vector/sqlite/node";
+
+const index = await createNodeSqliteVectorIndex({ name: "recall-eval", dimension: 384 });
+// insert/search/deleteWhere/clear have the same VectorIndex contract.
+await index.dispose();
+```
 
 ## The invariant: fail closed
 

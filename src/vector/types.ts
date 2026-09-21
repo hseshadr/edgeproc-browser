@@ -71,6 +71,12 @@ export interface VectorIndex {
 	/** Delete only named records that match the optional scope; return the count. */
 	delete(ids: ReadonlyArray<string>, filters?: Metadata): Promise<number>;
 
+	/** Delete every record matching a non-empty metadata scope; return the count. */
+	deleteWhere(filters: Metadata): Promise<number>;
+
+	/** Atomically delete every record in this index; return the count. */
+	clear(): Promise<number>;
+
 	/** Report live vectors in the optional scope. */
 	stats(filters?: Metadata): Promise<VectorStats>;
 

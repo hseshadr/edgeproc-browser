@@ -72,6 +72,17 @@ export class SqliteVectorIndexClient {
             ...(filters === undefined ? {} : { filters }),
         }));
     }
+    async deleteWhere(filters) {
+        await this.#ready;
+        return (await this.#request({
+            operation: "delete-where",
+            filters,
+        }));
+    }
+    async clear() {
+        await this.#ready;
+        return (await this.#request({ operation: "clear" }));
+    }
     async stats(filters) {
         await this.#ready;
         return (await this.#request({

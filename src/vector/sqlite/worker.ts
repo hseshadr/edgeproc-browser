@@ -1,22 +1,20 @@
 /// <reference lib="webworker" />
 
 import sqlite3InitModule from "./assets/sqlite3.mjs";
-import { type SqliteDatabase, SqliteDatabaseVectorIndex } from "./database.js";
+import {
+	type RawSqliteDatabase,
+	type SqliteDatabase,
+	SqliteDatabaseVectorIndex,
+	wrapSqliteDatabase,
+} from "./database.js";
 import type {
 	SqliteVectorWorkerOptions,
 	SqliteVectorWorkerRequest,
 	SqliteVectorWorkerResponse,
 } from "./protocol.js";
 
-interface RawDatabase {
-	exec(options: { sql: string; bind?: unknown[] }): unknown;
-	selectObjects(sql: string, bind?: unknown[]): Array<Record<string, unknown>>;
-	transaction<T>(callback: () => T): T;
-	close(): void;
-}
-
 interface SahPool {
-	readonly OpfsSAHPoolDb: new (filename: string) => RawDatabase;
+	readonly OpfsSAHPoolDb: new (filename: string) => RawSqliteDatabase;
 }
 
 interface SahPoolInstaller {
@@ -74,6 +72,10 @@ async function dispatch(request: SqliteVectorWorkerRequest): Promise<unknown> {
 			return current.search(request.query, request.limit, request.filters);
 		case "delete":
 			return current.delete(request.ids, request.filters);
+		case "delete-where":
+			return current.deleteWhere(request.filters);
+		case "clear":
+			return current.clear();
 		case "stats":
 			return current.stats(request.filters);
 		case "runtime-info":
@@ -93,7 +95,7 @@ async function openIndex(
 		printErr: (...args) => console.error(...args),
 	});
 	const persistence = options.persistence ?? "opfs";
-	let raw: RawDatabase;
+	let raw: RawSqliteDatabase;
 	if (persistence === "memory") {
 		raw = new sqlite.oo1.DB(":memory:");
 	} else if (persistence === "opfs") {
@@ -109,7 +111,7 @@ async function openIndex(
 		);
 	}
 
-	const database = wrapDatabase(raw);
+	const database = wrapSqliteDatabase(raw);
 	try {
 		if (persistence === "opfs") {
 			configurePersistentDatabase(database);
@@ -175,18 +177,6 @@ function isPoolContentionError(error: unknown): boolean {
 
 function sleep(delayMs: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, delayMs));
-}
-
-function wrapDatabase(raw: RawDatabase): SqliteDatabase {
-	return {
-		exec: (sql, bind) => {
-			raw.exec(bind === undefined ? { sql } : { sql, bind: [...bind] });
-		},
-		selectObjects: (sql, bind) =>
-			raw.selectObjects(sql, bind === undefined ? undefined : [...bind]),
-		transaction: (callback) => raw.transaction(callback),
-		close: () => raw.close(),
-	};
 }
 
 function configurePersistentDatabase(database: SqliteDatabase): void {

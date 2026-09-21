@@ -1,3 +1,14 @@
+/** Adapt SQLite's OO1 database surface without leaking it into the index API. */
+export function wrapSqliteDatabase(raw) {
+    return {
+        exec: (sql, bind) => {
+            raw.exec(bind === undefined ? { sql } : { sql, bind: [...bind] });
+        },
+        selectObjects: (sql, bind) => raw.selectObjects(sql, bind === undefined ? undefined : [...bind]),
+        transaction: (callback) => raw.transaction(callback),
+        close: () => raw.close(),
+    };
+}
 const CAPABILITIES = Object.freeze({
     metrics: Object.freeze(["cosine"]),
     exact: true,
@@ -80,6 +91,18 @@ export class SqliteDatabaseVectorIndex {
         const placeholders = unique.map(() => "?").join(", ");
         this.#database.exec(`DELETE FROM ${TABLE} WHERE id IN (${placeholders})${scoped.sql.replace("WHERE", " AND")}`, [...unique, ...scoped.bind]);
         return requireFiniteNumber(this.#database.selectObjects("SELECT changes() AS changed")[0]?.changed, "SQLite delete count");
+    }
+    async deleteWhere(filters) {
+        this.#assertOpen();
+        validateRequiredMetadata(filters, "filters");
+        const scoped = filterClause(filters, TABLE);
+        this.#database.exec(`DELETE FROM ${TABLE} ${scoped.sql}`, scoped.bind);
+        return changedRowCount(this.#database, "SQLite metadata delete count");
+    }
+    async clear() {
+        this.#assertOpen();
+        this.#database.exec(`DELETE FROM ${TABLE}`);
+        return changedRowCount(this.#database, "SQLite clear count");
     }
     async stats(filters) {
         this.#assertOpen();
@@ -236,6 +259,15 @@ function validateMetadata(metadata, at) {
             throw new TypeError(`${at}.${key} must be finite`);
         }
     }
+}
+function validateRequiredMetadata(metadata, at) {
+    validateMetadata(metadata, at);
+    if (Object.keys(metadata).length === 0) {
+        throw new TypeError(`${at} must contain at least one filter`);
+    }
+}
+function changedRowCount(database, at) {
+    return requireFiniteNumber(database.selectObjects("SELECT changes() AS changed")[0]?.changed, at);
 }
 function vectorBytes(vector) {
     return new Uint8Array(vector.slice().buffer);

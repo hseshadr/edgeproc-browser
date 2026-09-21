@@ -74,6 +74,24 @@ export class FlatVectorIndex {
         }
         return deleted;
     }
+    async deleteWhere(filters) {
+        this.#assertOpen();
+        validateRequiredMetadata(filters, "filters");
+        let deleted = 0;
+        for (const [id, record] of this.#records) {
+            if (matches(record.metadata, filters)) {
+                this.#records.delete(id);
+                deleted += 1;
+            }
+        }
+        return deleted;
+    }
+    async clear() {
+        this.#assertOpen();
+        const deleted = this.#records.size;
+        this.#records.clear();
+        return deleted;
+    }
     async stats(filters) {
         this.#assertOpen();
         validateMetadata(filters, "filters");
@@ -151,6 +169,12 @@ function validateMetadata(metadata, at) {
         if (typeof value === "number" && !Number.isFinite(value)) {
             throw new TypeError(`${at}.${key} must be finite`);
         }
+    }
+}
+function validateRequiredMetadata(metadata, at) {
+    validateMetadata(metadata, at);
+    if (Object.keys(metadata).length === 0) {
+        throw new TypeError(`${at} must contain at least one filter`);
     }
 }
 function matches(metadata, filters) {

@@ -38,6 +38,12 @@ export type SqliteVectorWorkerRequest =
 	  }
 	| {
 			readonly id: number;
+			readonly operation: "delete-where";
+			readonly filters: Metadata;
+	  }
+	| { readonly id: number; readonly operation: "clear" }
+	| {
+			readonly id: number;
 			readonly operation: "stats";
 			readonly filters?: Metadata;
 	  }

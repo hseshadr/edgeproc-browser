@@ -153,6 +153,7 @@ describe("published artefact contract", () => {
 			"dist/engine/spawn.js",
 			"dist/vector/index.js",
 			"dist/vector/sqlite/index.js",
+			"dist/vector/sqlite/node.js",
 		]) {
 			const url = pathToFileURL(join(ROOT, target)).href;
 			const result = spawnSync(
@@ -179,7 +180,7 @@ describe("published artefact contract", () => {
 		expect(pkg.files).toEqual(["dist"]);
 	});
 
-	it("ships no node: import in anything a browser will load", () => {
+	it("ships no node: import in browser entrypoints", () => {
 		// The fixture loader reads node:fs. It is test-only and tsconfig.build
 		// excludes it; this proves the exclusion held rather than trusting it.
 		const walk = (dir: string): string[] => {
@@ -193,9 +194,15 @@ describe("published artefact contract", () => {
 						: [];
 			});
 		};
-		const offenders = walk(DIST).filter((file) =>
-			/from\s*"node:|require\("node:/.test(readFileSync(file, "utf8")),
+		const nodeOnlyEntrypoint = join(DIST, "vector", "sqlite", "node.js");
+		const offenders = walk(DIST).filter(
+			(file) =>
+				file !== nodeOnlyEntrypoint &&
+				/from\s*"node:|require\("node:/.test(readFileSync(file, "utf8")),
 		);
 		expect(offenders).toEqual([]);
+		expect(readFileSync(nodeOnlyEntrypoint, "utf8")).toContain(
+			'from "node:fs/promises"',
+		);
 	});
 });

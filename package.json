@@ -60,6 +60,10 @@
 			"types": "./dist/vector/sqlite/index.d.ts",
 			"import": "./dist/vector/sqlite/index.js"
 		},
+		"./vector/sqlite/node": {
+			"types": "./dist/vector/sqlite/node.d.ts",
+			"import": "./dist/vector/sqlite/node.js"
+		},
 		"./package.json": "./package.json"
 	},
 	"sideEffects": [

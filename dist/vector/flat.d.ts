@@ -10,6 +10,8 @@ export declare class FlatVectorIndex implements VectorIndex {
     read(id: string): Promise<VectorRecord | undefined>;
     search(query: Float32Array, limit: number, filters?: Metadata): Promise<ReadonlyArray<VectorHit>>;
     delete(ids: ReadonlyArray<string>, filters?: Metadata): Promise<number>;
+    deleteWhere(filters: Metadata): Promise<number>;
+    clear(): Promise<number>;
     stats(filters?: Metadata): Promise<VectorStats>;
     dispose(): Promise<void>;
 }

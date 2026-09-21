@@ -1,6 +1,6 @@
 /// <reference lib="webworker" />
 import sqlite3InitModule from "./assets/sqlite3.mjs";
-import { SqliteDatabaseVectorIndex } from "./database.js";
+import { SqliteDatabaseVectorIndex, wrapSqliteDatabase, } from "./database.js";
 const POOL_ACQUIRE_MAX_ATTEMPTS = 8;
 const POOL_ACQUIRE_INITIAL_DELAY_MS = 50;
 const POOL_ACQUIRE_MAX_DELAY_MS = 800;
@@ -44,6 +44,10 @@ async function dispatch(request) {
             return current.search(request.query, request.limit, request.filters);
         case "delete":
             return current.delete(request.ids, request.filters);
+        case "delete-where":
+            return current.deleteWhere(request.filters);
+        case "clear":
+            return current.clear();
         case "stats":
             return current.stats(request.filters);
         case "runtime-info":
@@ -72,7 +76,7 @@ async function openIndex(options) {
     else {
         throw new TypeError(`unsupported SQLite persistence: ${String(persistence)}`);
     }
-    const database = wrapDatabase(raw);
+    const database = wrapSqliteDatabase(raw);
     try {
         if (persistence === "opfs") {
             configurePersistentDatabase(database);
@@ -120,16 +124,6 @@ function isPoolContentionError(error) {
 }
 function sleep(delayMs) {
     return new Promise((resolve) => setTimeout(resolve, delayMs));
-}
-function wrapDatabase(raw) {
-    return {
-        exec: (sql, bind) => {
-            raw.exec(bind === undefined ? { sql } : { sql, bind: [...bind] });
-        },
-        selectObjects: (sql, bind) => raw.selectObjects(sql, bind === undefined ? undefined : [...bind]),
-        transaction: (callback) => raw.transaction(callback),
-        close: () => raw.close(),
-    };
 }
 function configurePersistentDatabase(database) {
     database.exec("PRAGMA secure_delete = ON");
