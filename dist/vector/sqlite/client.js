@@ -48,6 +48,10 @@ export class SqliteVectorIndexClient {
         await this.#ready;
         await this.#request({ operation: "insert", records });
     }
+    async insertKeyed(records) {
+        await this.#ready;
+        await this.#request({ operation: "insert-keyed", records });
+    }
     async read(id) {
         await this.#ready;
         return (await this.#request({
@@ -70,6 +74,14 @@ export class SqliteVectorIndexClient {
             operation: "search-by-ids",
             query,
             ids,
+        }));
+    }
+    async lookupIds(keys, maxDocumentFrequency) {
+        await this.#ready;
+        return (await this.#request({
+            operation: "lookup-ids",
+            keys,
+            maxDocumentFrequency,
         }));
     }
     async delete(ids, filters) {

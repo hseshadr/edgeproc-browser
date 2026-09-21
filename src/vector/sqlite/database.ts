@@ -37,6 +37,17 @@ export interface SqliteVectorRuntimeInfo {
 	readonly bundledExtensions: ReadonlyArray<string>;
 }
 
+/** A caller-defined exact lookup term stored beside a vector record. */
+export interface SqliteLookupKey {
+	readonly namespace: string;
+	readonly value: string;
+}
+
+/** A vector record with exact lookup terms for bounded candidate retrieval. */
+export interface SqliteKeyedVectorRecord extends VectorRecord {
+	readonly lookupKeys: ReadonlyArray<SqliteLookupKey>;
+}
+
 /** Adapt SQLite's OO1 database surface without leaking it into the index API. */
 export function wrapSqliteDatabase(raw: RawSqliteDatabase): SqliteDatabase {
 	return {
@@ -60,8 +71,10 @@ const CAPABILITIES: VectorIndexCapabilities = Object.freeze({
 
 const TABLE = "edgeproc_vectors";
 const METADATA_TABLE = "edgeproc_vector_metadata";
+const LOOKUP_TABLE = "edgeproc_vector_lookup_keys";
 const CONFIG_TABLE = "edgeproc_vector_config";
 const SQLITE_MAX_BIND_PARAMETERS = 32_766;
+const MAX_LOOKUP_QUERY_KEYS = 64;
 
 /** Exact FLOAT32 cosine index backed by SQLite plus sqlite-vector. */
 export class SqliteDatabaseVectorIndex implements VectorIndex {
@@ -93,24 +106,71 @@ export class SqliteDatabaseVectorIndex implements VectorIndex {
 		);
 		this.#database.transaction(() => {
 			for (const record of accepted) {
-				this.#database.exec(`DELETE FROM ${TABLE} WHERE id = ?`, [record.id]);
-				this.#database.exec(
-					`INSERT INTO ${TABLE}(id, embedding, metadata_json) VALUES(?, vector_as_f32(?), ?)`,
-					[
-						record.id,
-						vectorBytes(record.vector),
-						JSON.stringify(record.metadata),
-					],
-				);
-				for (const [key, value] of Object.entries(record.metadata)) {
-					const encoded = encodeScalar(value);
-					this.#database.exec(
-						`INSERT INTO ${METADATA_TABLE}(record_id, key, kind, value_text, value_number) VALUES(?, ?, ?, ?, ?)`,
-						[record.id, key, encoded.kind, encoded.text, encoded.number],
-					);
-				}
+				this.#replaceRecord(record, []);
 			}
 		});
+	}
+
+	public async insertKeyed(
+		records: ReadonlyArray<SqliteKeyedVectorRecord>,
+	): Promise<void> {
+		this.#assertOpen();
+		const accepted = records.map((record) =>
+			validateAndCopyKeyedRecord(record, this.dimension),
+		);
+		this.#database.transaction(() => {
+			for (const record of accepted) {
+				this.#replaceRecord(record, record.lookupKeys);
+			}
+		});
+	}
+
+	public async lookupIds(
+		keys: ReadonlyArray<SqliteLookupKey>,
+		maxDocumentFrequency: number,
+	): Promise<ReadonlyArray<string>> {
+		this.#assertOpen();
+		validateMaxDocumentFrequency(maxDocumentFrequency);
+		const unique = uniqueLookupKeys(keys, "lookup keys");
+		if (unique.length > MAX_LOOKUP_QUERY_KEYS) {
+			throw new RangeError(
+				`lookup query must contain at most ${MAX_LOOKUP_QUERY_KEYS} distinct keys`,
+			);
+		}
+		if (unique.length === 0) {
+			return [];
+		}
+
+		const values = unique.map(() => "(?, ?, ?)").join(", ");
+		const bind: SqliteValue[] = [];
+		for (const [ordinal, key] of unique.entries()) {
+			bind.push(ordinal, key.namespace, key.value);
+		}
+		bind.push(maxDocumentFrequency);
+		const rows = this.#database.selectObjects(
+			`WITH query_keys(query_ordinal, namespace, lookup_key) AS (VALUES ${values}),
+			 eligible_keys AS (
+				SELECT q.query_ordinal, q.namespace, q.lookup_key
+				FROM query_keys AS q
+				JOIN ${LOOKUP_TABLE} AS k
+				  ON k.namespace = q.namespace AND k.lookup_key = q.lookup_key
+				GROUP BY q.query_ordinal, q.namespace, q.lookup_key
+				HAVING COUNT(*) <= ?
+			 ),
+			 ranked AS (
+				SELECT k.record_id, MIN(e.query_ordinal) AS first_query_ordinal
+				FROM eligible_keys AS e
+				JOIN ${LOOKUP_TABLE} AS k
+				  ON k.namespace = e.namespace AND k.lookup_key = e.lookup_key
+				GROUP BY k.record_id
+			 )
+			 SELECT v.id AS id
+			 FROM ranked
+			 JOIN ${TABLE} AS v ON v.id = ranked.record_id
+			 ORDER BY ranked.first_query_ordinal ASC, v.rowid ASC`,
+			bind,
+		);
+		return rows.map((row) => requireString(row.id, "lookup result id"));
 	}
 
 	public async read(id: string): Promise<VectorRecord | undefined> {
@@ -291,6 +351,14 @@ export class SqliteDatabaseVectorIndex implements VectorIndex {
 				value_number REAL,
 				PRIMARY KEY(record_id, key)
 			);
+			CREATE TABLE IF NOT EXISTS ${LOOKUP_TABLE}(
+				record_id TEXT NOT NULL REFERENCES ${TABLE}(id) ON DELETE CASCADE,
+				namespace TEXT NOT NULL CHECK(length(namespace) > 0),
+				lookup_key TEXT NOT NULL CHECK(length(lookup_key) > 0),
+				PRIMARY KEY(record_id, namespace, lookup_key)
+			) WITHOUT ROWID;
+			CREATE INDEX IF NOT EXISTS edgeproc_vector_lookup_keys_lookup
+				ON ${LOOKUP_TABLE}(namespace, lookup_key, record_id);
 		`);
 		this.#database.exec(
 			`INSERT OR IGNORE INTO ${CONFIG_TABLE}(singleton, dimension) VALUES(1, ?)`,
@@ -316,6 +384,30 @@ export class SqliteDatabaseVectorIndex implements VectorIndex {
 	#assertOpen(): void {
 		if (this.#disposed) {
 			throw new Error(`vector index ${JSON.stringify(this.name)} is disposed`);
+		}
+	}
+
+	#replaceRecord(
+		record: VectorRecord,
+		lookupKeys: ReadonlyArray<SqliteLookupKey>,
+	): void {
+		this.#database.exec(`DELETE FROM ${TABLE} WHERE id = ?`, [record.id]);
+		this.#database.exec(
+			`INSERT INTO ${TABLE}(id, embedding, metadata_json) VALUES(?, vector_as_f32(?), ?)`,
+			[record.id, vectorBytes(record.vector), JSON.stringify(record.metadata)],
+		);
+		for (const [key, value] of Object.entries(record.metadata)) {
+			const encoded = encodeScalar(value);
+			this.#database.exec(
+				`INSERT INTO ${METADATA_TABLE}(record_id, key, kind, value_text, value_number) VALUES(?, ?, ?, ?, ?)`,
+				[record.id, key, encoded.kind, encoded.text, encoded.number],
+			);
+		}
+		for (const key of lookupKeys) {
+			this.#database.exec(
+				`INSERT INTO ${LOOKUP_TABLE}(record_id, namespace, lookup_key) VALUES(?, ?, ?)`,
+				[record.id, key.namespace, key.value],
+			);
 		}
 	}
 }
@@ -390,6 +482,58 @@ function validateAndCopyRecord(
 		vector: record.vector.slice(),
 		metadata: { ...record.metadata },
 	};
+}
+
+function validateAndCopyKeyedRecord(
+	record: SqliteKeyedVectorRecord,
+	dimension: number,
+): SqliteKeyedVectorRecord {
+	const vectorRecord = validateAndCopyRecord(record, dimension);
+	return {
+		...vectorRecord,
+		lookupKeys: uniqueLookupKeys(
+			record.lookupKeys,
+			`record ${JSON.stringify(record.id)} lookup keys`,
+		),
+	};
+}
+
+function uniqueLookupKeys(
+	keys: ReadonlyArray<SqliteLookupKey>,
+	at: string,
+): ReadonlyArray<SqliteLookupKey> {
+	if (!Array.isArray(keys)) {
+		throw new TypeError(`${at} must be an array`);
+	}
+	const seen = new Set<string>();
+	const unique: SqliteLookupKey[] = [];
+	for (const key of keys) {
+		validateLookupKey(key, at);
+		const identity = JSON.stringify([key.namespace, key.value]);
+		if (!seen.has(identity)) {
+			seen.add(identity);
+			unique.push({ namespace: key.namespace, value: key.value });
+		}
+	}
+	return unique;
+}
+
+function validateLookupKey(key: SqliteLookupKey, at: string): void {
+	if (typeof key !== "object" || key === null) {
+		throw new TypeError(`${at} must contain lookup key objects`);
+	}
+	if (typeof key.namespace !== "string" || key.namespace.length === 0) {
+		throw new TypeError(`${at} contains an empty namespace`);
+	}
+	if (typeof key.value !== "string" || key.value.length === 0) {
+		throw new TypeError(`${at} contains an empty value`);
+	}
+}
+
+function validateMaxDocumentFrequency(maxDocumentFrequency: number): void {
+	if (!Number.isInteger(maxDocumentFrequency) || maxDocumentFrequency < 1) {
+		throw new RangeError("maximum document frequency must be an integer >= 1");
+	}
 }
 
 function validateId(id: string): void {
