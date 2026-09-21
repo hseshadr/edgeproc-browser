@@ -23,6 +23,15 @@ export interface SqliteVectorRuntimeInfo {
     readonly vectorBackend: string;
     readonly bundledExtensions: ReadonlyArray<string>;
 }
+/** A caller-defined exact lookup term stored beside a vector record. */
+export interface SqliteLookupKey {
+    readonly namespace: string;
+    readonly value: string;
+}
+/** A vector record with exact lookup terms for bounded candidate retrieval. */
+export interface SqliteKeyedVectorRecord extends VectorRecord {
+    readonly lookupKeys: ReadonlyArray<SqliteLookupKey>;
+}
 /** Adapt SQLite's OO1 database surface without leaking it into the index API. */
 export declare function wrapSqliteDatabase(raw: RawSqliteDatabase): SqliteDatabase;
 /** Exact FLOAT32 cosine index backed by SQLite plus sqlite-vector. */
@@ -33,6 +42,8 @@ export declare class SqliteDatabaseVectorIndex implements VectorIndex {
     readonly capabilities: VectorIndexCapabilities;
     constructor(options: VectorIndexOptions, database: SqliteDatabase, persistent?: boolean);
     insert(records: ReadonlyArray<VectorRecord>): Promise<void>;
+    insertKeyed(records: ReadonlyArray<SqliteKeyedVectorRecord>): Promise<void>;
+    lookupIds(keys: ReadonlyArray<SqliteLookupKey>, maxDocumentFrequency: number): Promise<ReadonlyArray<string>>;
     read(id: string): Promise<VectorRecord | undefined>;
     search(query: Float32Array, limit: number, filters?: Metadata): Promise<ReadonlyArray<VectorHit>>;
     searchByIds(query: Float32Array, ids: ReadonlyArray<string>): Promise<ReadonlyArray<VectorHit>>;

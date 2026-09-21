@@ -1,5 +1,5 @@
 import type { Metadata, VectorHit, VectorIndex, VectorIndexCapabilities, VectorRecord, VectorStats } from "../types.js";
-import type { SqliteVectorRuntimeInfo } from "./database.js";
+import type { SqliteKeyedVectorRecord, SqliteLookupKey, SqliteVectorRuntimeInfo } from "./database.js";
 import type { SqliteVectorWorkerOptions, SqliteVectorWorkerRequest, SqliteVectorWorkerResponse } from "./protocol.js";
 interface WorkerLike {
     postMessage(message: SqliteVectorWorkerRequest): void;
@@ -10,6 +10,8 @@ interface WorkerLike {
 }
 export type SqliteVectorWorkerFactory = () => WorkerLike;
 export interface SqliteWorkerVectorIndex extends VectorIndex {
+    insertKeyed(records: ReadonlyArray<SqliteKeyedVectorRecord>): Promise<void>;
+    lookupIds(keys: ReadonlyArray<SqliteLookupKey>, maxDocumentFrequency: number): Promise<ReadonlyArray<string>>;
     runtimeInfo(): Promise<SqliteVectorRuntimeInfo>;
 }
 /** Worker proxy that keeps synchronous SQLite and OPFS access off the UI thread. */
@@ -21,9 +23,11 @@ export declare class SqliteVectorIndexClient implements SqliteWorkerVectorIndex 
     constructor(options: SqliteVectorWorkerOptions, workerFactory?: SqliteVectorWorkerFactory);
     ready(): Promise<void>;
     insert(records: ReadonlyArray<VectorRecord>): Promise<void>;
+    insertKeyed(records: ReadonlyArray<SqliteKeyedVectorRecord>): Promise<void>;
     read(id: string): Promise<VectorRecord | undefined>;
     search(query: Float32Array, limit: number, filters?: Metadata): Promise<ReadonlyArray<VectorHit>>;
     searchByIds(query: Float32Array, ids: ReadonlyArray<string>): Promise<ReadonlyArray<VectorHit>>;
+    lookupIds(keys: ReadonlyArray<SqliteLookupKey>, maxDocumentFrequency: number): Promise<ReadonlyArray<string>>;
     delete(ids: ReadonlyArray<string>, filters?: Metadata): Promise<number>;
     deleteWhere(filters: Metadata): Promise<number>;
     clear(): Promise<number>;

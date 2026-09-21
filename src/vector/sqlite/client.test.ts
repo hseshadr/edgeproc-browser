@@ -106,6 +106,8 @@ function valueFor(request: SqliteVectorWorkerRequest): unknown {
 			return [{ id: "nearest", distance: 0, metadata: {} }];
 		case "search-by-ids":
 			return [{ id: request.ids[0] ?? "missing", distance: 0, metadata: {} }];
+		case "lookup-ids":
+			return ["lookup-row"];
 		case "delete":
 			return request.ids.length;
 		case "delete-where":
@@ -143,6 +145,14 @@ describe("SqliteVectorIndexClient", () => {
 		await index.insert([
 			{ id: "row", vector: new Float32Array([1, 0]), metadata: {} },
 		]);
+		await index.insertKeyed([
+			{
+				id: "lookup-row",
+				vector: new Float32Array([1, 0]),
+				metadata: {},
+				lookupKeys: [{ namespace: "token", value: "lookup" }],
+			},
+		]);
 		expect((await index.read("row"))?.id).toBe("row");
 		expect((await index.search(new Float32Array([1, 0]), 1))[0]?.id).toBe(
 			"nearest",
@@ -150,11 +160,32 @@ describe("SqliteVectorIndexClient", () => {
 		expect(
 			(await index.searchByIds(new Float32Array([1, 0]), ["row"]))[0]?.id,
 		).toBe("row");
+		expect(
+			await index.lookupIds([{ namespace: "token", value: "lookup" }], 10),
+		).toEqual(["lookup-row"]);
 		expect(await index.delete(["row"])).toBe(1);
 		expect(await index.deleteWhere({ tenant: "client" })).toBe(2);
 		expect(await index.clear()).toBe(3);
 		expect((await index.stats()).vectorBytes).toBe(8);
 		expect((await index.runtimeInfo()).vectorVersion).toBe("1.1.2");
+		expect(worker.requests).toContainEqual({
+			id: expect.any(Number),
+			operation: "insert-keyed",
+			records: [
+				{
+					id: "lookup-row",
+					vector: new Float32Array([1, 0]),
+					metadata: {},
+					lookupKeys: [{ namespace: "token", value: "lookup" }],
+				},
+			],
+		});
+		expect(worker.requests).toContainEqual({
+			id: expect.any(Number),
+			operation: "lookup-ids",
+			keys: [{ namespace: "token", value: "lookup" }],
+			maxDocumentFrequency: 10,
+		});
 
 		await index.dispose();
 		await index.dispose();

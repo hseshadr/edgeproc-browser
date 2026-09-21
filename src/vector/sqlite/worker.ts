@@ -66,12 +66,16 @@ async function dispatch(request: SqliteVectorWorkerRequest): Promise<unknown> {
 	switch (request.operation) {
 		case "insert":
 			return current.insert(request.records);
+		case "insert-keyed":
+			return current.insertKeyed(request.records);
 		case "read":
 			return current.read(request.recordId);
 		case "search":
 			return current.search(request.query, request.limit, request.filters);
 		case "search-by-ids":
 			return current.searchByIds(request.query, request.ids);
+		case "lookup-ids":
+			return current.lookupIds(request.keys, request.maxDocumentFrequency);
 		case "delete":
 			return current.delete(request.ids, request.filters);
 		case "delete-where":

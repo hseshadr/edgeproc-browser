@@ -148,6 +148,221 @@ describe("SqliteDatabaseVectorIndex", () => {
 		await index.dispose();
 	});
 
+	it("indexes generic lookup keys with namespace isolation, stable order, and a strict document-frequency cap", async () => {
+		const index = new SqliteDatabaseVectorIndex(
+			{ name: "lookup", dimension: 2 },
+			await openMemoryDatabase(),
+			false,
+		);
+		await index.insertKeyed([
+			{
+				id: "first",
+				vector: new Float32Array([1, 0]),
+				metadata: {},
+				lookupKeys: [
+					{ namespace: "token", value: "shared" },
+					{ namespace: "phonetic", value: "A150" },
+				],
+			},
+			{
+				id: "second",
+				vector: new Float32Array([0, 1]),
+				metadata: {},
+				lookupKeys: [
+					{ namespace: "token", value: "shared" },
+					{ namespace: "token", value: "rare" },
+				],
+			},
+			{
+				id: "third",
+				vector: new Float32Array([0.5, 0.5]),
+				metadata: {},
+				lookupKeys: [{ namespace: "token", value: "rare" }],
+			},
+		]);
+
+		expect(
+			await index.lookupIds(
+				[
+					{ namespace: "token", value: "rare" },
+					{ namespace: "phonetic", value: "A150" },
+					{ namespace: "token", value: "rare" },
+				],
+				2,
+			),
+		).toEqual(["second", "third", "first"]);
+		expect(
+			await index.lookupIds([{ namespace: "token", value: "shared" }], 1),
+		).toEqual([]);
+		expect(
+			await index.lookupIds([{ namespace: "other", value: "shared" }], 10),
+		).toEqual([]);
+		await index.dispose();
+	});
+
+	it("replaces and cascades lookup keys with their vector record", async () => {
+		const index = new SqliteDatabaseVectorIndex(
+			{ name: "lookup-lifecycle", dimension: 2 },
+			await openMemoryDatabase(),
+			false,
+		);
+		await index.insertKeyed([
+			{
+				id: "row",
+				vector: new Float32Array([1, 0]),
+				metadata: {},
+				lookupKeys: [{ namespace: "token", value: "old" }],
+			},
+		]);
+		await index.insertKeyed([
+			{
+				id: "row",
+				vector: new Float32Array([0, 1]),
+				metadata: {},
+				lookupKeys: [
+					{ namespace: "token", value: "new" },
+					{ namespace: "token", value: "new" },
+				],
+			},
+		]);
+		expect(
+			await index.lookupIds([{ namespace: "token", value: "old" }], 10),
+		).toEqual([]);
+		expect(
+			await index.lookupIds([{ namespace: "token", value: "new" }], 10),
+		).toEqual(["row"]);
+
+		await index.insert([
+			{ id: "row", vector: new Float32Array([1, 0]), metadata: {} },
+		]);
+		expect(
+			await index.lookupIds([{ namespace: "token", value: "new" }], 10),
+		).toEqual([]);
+
+		await index.insertKeyed([
+			{
+				id: "row",
+				vector: new Float32Array([1, 0]),
+				metadata: {},
+				lookupKeys: [{ namespace: "token", value: "delete-me" }],
+			},
+		]);
+		expect(await index.delete(["row"])).toBe(1);
+		expect(
+			await index.lookupIds([{ namespace: "token", value: "delete-me" }], 10),
+		).toEqual([]);
+		await index.dispose();
+	});
+
+	it("validates and binds lookup inputs without partially replacing records", async () => {
+		const database = await openMemoryDatabase();
+		const index = new SqliteDatabaseVectorIndex(
+			{ name: "lookup-validation", dimension: 2 },
+			database,
+			false,
+		);
+		await index.insertKeyed([
+			{
+				id: "safe",
+				vector: new Float32Array([1, 0]),
+				metadata: {},
+				lookupKeys: [
+					{
+						namespace: `token') OR 1=1 --`,
+						value: `a'); DROP TABLE edgeproc_vectors; --`,
+					},
+				],
+			},
+		]);
+		expect(
+			await index.lookupIds(
+				[
+					{
+						namespace: `token') OR 1=1 --`,
+						value: `a'); DROP TABLE edgeproc_vectors; --`,
+					},
+				],
+				1,
+			),
+		).toEqual(["safe"]);
+		database.exec(`
+			CREATE TRIGGER reject_lookup_key
+			BEFORE INSERT ON edgeproc_vector_lookup_keys
+			WHEN NEW.lookup_key = 'force-rollback'
+			BEGIN
+				SELECT RAISE(ABORT, 'forced lookup failure');
+			END;
+		`);
+		await expect(
+			index.insertKeyed([
+				{
+					id: "safe",
+					vector: new Float32Array([0, 1]),
+					metadata: {},
+					lookupKeys: [{ namespace: "token", value: "replacement" }],
+				},
+				{
+					id: "fails",
+					vector: new Float32Array([0, 1]),
+					metadata: {},
+					lookupKeys: [{ namespace: "token", value: "force-rollback" }],
+				},
+			]),
+		).rejects.toThrow(/forced lookup failure/);
+		expect(
+			await index.lookupIds(
+				[
+					{
+						namespace: `token') OR 1=1 --`,
+						value: `a'); DROP TABLE edgeproc_vectors; --`,
+					},
+				],
+				1,
+			),
+		).toEqual(["safe"]);
+		expect(await index.read("fails")).toBeUndefined();
+
+		await expect(
+			index.insertKeyed([
+				{
+					id: "safe",
+					vector: new Float32Array([0, 1]),
+					metadata: {},
+					lookupKeys: [{ namespace: "", value: "invalid" }],
+				},
+			]),
+		).rejects.toThrow(/empty namespace/);
+		expect(
+			await index.lookupIds(
+				[
+					{
+						namespace: `token') OR 1=1 --`,
+						value: `a'); DROP TABLE edgeproc_vectors; --`,
+					},
+				],
+				1,
+			),
+		).toEqual(["safe"]);
+		await expect(
+			index.lookupIds([{ namespace: "", value: "x" }], 1),
+		).rejects.toThrow(/empty namespace/);
+		await expect(
+			index.lookupIds([{ namespace: "x", value: "" }], 1),
+		).rejects.toThrow(/empty value/);
+		await expect(index.lookupIds([], 0)).rejects.toThrow(/document frequency/);
+		await expect(
+			index.lookupIds(
+				Array.from({ length: 65 }, (_, ordinal) => ({
+					namespace: "token",
+					value: String(ordinal),
+				})),
+				1,
+			),
+		).rejects.toThrow(/at most 64/);
+		expect((await index.stats()).vectorCount).toBe(1);
+		await index.dispose();
+	});
+
 	it("rejects reopening a database with a different dimension", async () => {
 		const database = await openMemoryDatabase();
 		const first = new SqliteDatabaseVectorIndex(

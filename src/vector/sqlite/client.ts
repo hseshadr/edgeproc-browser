@@ -6,7 +6,11 @@ import type {
 	VectorRecord,
 	VectorStats,
 } from "../types.js";
-import type { SqliteVectorRuntimeInfo } from "./database.js";
+import type {
+	SqliteKeyedVectorRecord,
+	SqliteLookupKey,
+	SqliteVectorRuntimeInfo,
+} from "./database.js";
 import type {
 	SqliteVectorWorkerOptions,
 	SqliteVectorWorkerRequest,
@@ -30,6 +34,11 @@ interface WorkerLike {
 export type SqliteVectorWorkerFactory = () => WorkerLike;
 
 export interface SqliteWorkerVectorIndex extends VectorIndex {
+	insertKeyed(records: ReadonlyArray<SqliteKeyedVectorRecord>): Promise<void>;
+	lookupIds(
+		keys: ReadonlyArray<SqliteLookupKey>,
+		maxDocumentFrequency: number,
+	): Promise<ReadonlyArray<string>>;
 	runtimeInfo(): Promise<SqliteVectorRuntimeInfo>;
 }
 
@@ -107,6 +116,13 @@ export class SqliteVectorIndexClient implements SqliteWorkerVectorIndex {
 		await this.#request({ operation: "insert", records });
 	}
 
+	public async insertKeyed(
+		records: ReadonlyArray<SqliteKeyedVectorRecord>,
+	): Promise<void> {
+		await this.#ready;
+		await this.#request({ operation: "insert-keyed", records });
+	}
+
 	public async read(id: string): Promise<VectorRecord | undefined> {
 		await this.#ready;
 		return (await this.#request({
@@ -139,6 +155,18 @@ export class SqliteVectorIndexClient implements SqliteWorkerVectorIndex {
 			query,
 			ids,
 		})) as ReadonlyArray<VectorHit>;
+	}
+
+	public async lookupIds(
+		keys: ReadonlyArray<SqliteLookupKey>,
+		maxDocumentFrequency: number,
+	): Promise<ReadonlyArray<string>> {
+		await this.#ready;
+		return (await this.#request({
+			operation: "lookup-ids",
+			keys,
+			maxDocumentFrequency,
+		})) as ReadonlyArray<string>;
 	}
 
 	public async delete(

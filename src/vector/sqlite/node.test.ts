@@ -44,6 +44,14 @@ describe("createNodeSqliteVectorIndex", () => {
 				metadata: { tenant: "a", active: false },
 			},
 		]);
+		await index.insertKeyed([
+			{
+				id: "keyed",
+				vector: new Float32Array([0.5, 0.5]),
+				metadata: { tenant: "b" },
+				lookupKeys: [{ namespace: "token", value: "portable" }],
+			},
+		]);
 
 		expect(index.runtimeInfo()).toMatchObject({
 			sqliteVersion: "3.53.4",
@@ -55,11 +63,14 @@ describe("createNodeSqliteVectorIndex", () => {
 				await index.searchByIds(new Float32Array([1, 0]), ["remove", "keep"])
 			).map(({ id }) => id),
 		).toEqual(["keep", "remove"]);
+		expect(
+			await index.lookupIds([{ namespace: "token", value: "portable" }], 1),
+		).toEqual(["keyed"]);
 		expect(await index.deleteWhere({ active: false })).toBe(1);
 		expect((await index.search(new Float32Array([1, 0]), 1))[0]?.id).toBe(
 			"keep",
 		);
-		expect(await index.clear()).toBe(1);
+		expect(await index.clear()).toBe(2);
 		expect((await index.stats()).vectorCount).toBe(0);
 		await index.dispose();
 		await expect(index.clear()).rejects.toThrow(/disposed/);

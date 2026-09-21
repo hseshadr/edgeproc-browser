@@ -1,5 +1,5 @@
 import type { Metadata, VectorIndexOptions, VectorRecord } from "../types.js";
-import type { SqliteVectorRuntimeInfo } from "./database.js";
+import type { SqliteKeyedVectorRecord, SqliteLookupKey, SqliteVectorRuntimeInfo } from "./database.js";
 export type SqliteVectorPersistence = "memory" | "opfs";
 export interface SqliteVectorWorkerOptions extends VectorIndexOptions {
     readonly persistence?: SqliteVectorPersistence;
@@ -12,6 +12,10 @@ export type SqliteVectorWorkerRequest = {
     readonly id: number;
     readonly operation: "insert";
     readonly records: ReadonlyArray<VectorRecord>;
+} | {
+    readonly id: number;
+    readonly operation: "insert-keyed";
+    readonly records: ReadonlyArray<SqliteKeyedVectorRecord>;
 } | {
     readonly id: number;
     readonly operation: "read";
@@ -27,6 +31,11 @@ export type SqliteVectorWorkerRequest = {
     readonly operation: "search-by-ids";
     readonly query: Float32Array;
     readonly ids: ReadonlyArray<string>;
+} | {
+    readonly id: number;
+    readonly operation: "lookup-ids";
+    readonly keys: ReadonlyArray<SqliteLookupKey>;
+    readonly maxDocumentFrequency: number;
 } | {
     readonly id: number;
     readonly operation: "delete";

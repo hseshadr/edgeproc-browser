@@ -7,6 +7,8 @@ export {
 export {
 	type SqliteDatabase,
 	SqliteDatabaseVectorIndex,
+	type SqliteKeyedVectorRecord,
+	type SqliteLookupKey,
 	type SqliteValue,
 	type SqliteVectorRuntimeInfo,
 } from "./database.js";
