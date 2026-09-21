@@ -7,8 +7,8 @@
 		"declaration": true,
 		"declarationMap": true,
 		"sourceMap": true,
-		/* Nothing that ships touches node:*. Dropping the node types here is the
-		   compile-time proof of that, not a comment claiming it. */
+		/* Browser entries are node-free. The explicit Node-only sqlite entry
+		   scopes its own node type reference, so it cannot leak into them. */
 		"types": []
 	},
 	"include": ["src"],

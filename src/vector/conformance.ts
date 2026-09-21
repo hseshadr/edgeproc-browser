@@ -29,6 +29,9 @@ export async function assertVectorIndexConformance(
 		["empty filters are unscoped", checkEmptyFilters],
 		["scoped delete", checkScopedDelete],
 		["unscoped delete", checkUnscopedDelete],
+		["metadata delete", checkDeleteWhere],
+		["metadata delete refusal", checkDeleteWhereRefusal],
+		["clear", checkClear],
 		["stats", checkStats],
 		["dimension refusal", checkDimensionRefusal],
 		["non-finite refusal", checkNonFiniteRefusal],
@@ -181,6 +184,45 @@ async function checkUnscopedDelete(index: VectorIndex): Promise<void> {
 	);
 }
 
+async function checkDeleteWhere(index: VectorIndex): Promise<void> {
+	await index.insert(seedRows());
+	const deleted = await index.deleteWhere({ tenant: "a", tier: "hot" });
+	assert(deleted === 1, "deleteWhere must report only matching rows");
+	assert(
+		(await index.read("a-hot")) === undefined,
+		"deleteWhere left its matching row alive",
+	);
+	assert(
+		(await index.read("a-cold")) !== undefined,
+		"deleteWhere crossed its AND scope",
+	);
+}
+
+async function checkDeleteWhereRefusal(index: VectorIndex): Promise<void> {
+	await assertRejects(
+		() => index.deleteWhere({}),
+		"deleteWhere accepted an unscoped empty filter",
+	);
+	const invalid = { nested: { unsafe: true } } as unknown as Metadata;
+	await assertRejects(
+		() => index.deleteWhere(invalid),
+		"deleteWhere accepted nested metadata",
+	);
+}
+
+async function checkClear(index: VectorIndex): Promise<void> {
+	await index.insert(seedRows());
+	assert(
+		(await index.clear()) === 4,
+		"clear must return its exact deleted count",
+	);
+	assert((await index.stats()).vectorCount === 0, "clear left a vector alive");
+	assert(
+		(await index.clear()) === 0,
+		"clear must report zero after an empty clear",
+	);
+}
+
 async function checkStats(index: VectorIndex): Promise<void> {
 	await index.insert(seedRows());
 	const all = await index.stats();
@@ -252,6 +294,14 @@ async function checkDisposedUseRefusal(index: VectorIndex): Promise<void> {
 	await assertRejects(
 		() => index.search(QUERY, 1),
 		"search remained usable after dispose",
+	);
+	await assertRejects(
+		() => index.deleteWhere({ tenant: "a" }),
+		"deleteWhere remained usable after dispose",
+	);
+	await assertRejects(
+		() => index.clear(),
+		"clear remained usable after dispose",
 	);
 }
 

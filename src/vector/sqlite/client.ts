@@ -141,6 +141,19 @@ export class SqliteVectorIndexClient implements SqliteWorkerVectorIndex {
 		})) as number;
 	}
 
+	public async deleteWhere(filters: Metadata): Promise<number> {
+		await this.#ready;
+		return (await this.#request({
+			operation: "delete-where",
+			filters,
+		})) as number;
+	}
+
+	public async clear(): Promise<number> {
+		await this.#ready;
+		return (await this.#request({ operation: "clear" })) as number;
+	}
+
 	public async stats(filters?: Metadata): Promise<VectorStats> {
 		await this.#ready;
 		return (await this.#request({

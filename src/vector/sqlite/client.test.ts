@@ -106,6 +106,10 @@ function valueFor(request: SqliteVectorWorkerRequest): unknown {
 			return [{ id: "nearest", distance: 0, metadata: {} }];
 		case "delete":
 			return request.ids.length;
+		case "delete-where":
+			return 2;
+		case "clear":
+			return 3;
 		case "stats":
 			return {
 				name: "client",
@@ -142,6 +146,8 @@ describe("SqliteVectorIndexClient", () => {
 			"nearest",
 		);
 		expect(await index.delete(["row"])).toBe(1);
+		expect(await index.deleteWhere({ tenant: "client" })).toBe(2);
+		expect(await index.clear()).toBe(3);
 		expect((await index.stats()).vectorBytes).toBe(8);
 		expect((await index.runtimeInfo()).vectorVersion).toBe("1.1.2");
 

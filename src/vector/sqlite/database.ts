@@ -22,11 +22,32 @@ export interface SqliteDatabase {
 	close(): void;
 }
 
+/** Raw SQLite OO1 shape shared by browser Worker and Node-only adapters. */
+export interface RawSqliteDatabase {
+	exec(options: { readonly sql: string; readonly bind?: unknown[] }): unknown;
+	selectObjects(sql: string, bind?: unknown[]): Array<Record<string, unknown>>;
+	transaction<T>(callback: () => T): T;
+	close(): void;
+}
+
 export interface SqliteVectorRuntimeInfo {
 	readonly sqliteVersion: string;
 	readonly vectorVersion: string;
 	readonly vectorBackend: string;
 	readonly bundledExtensions: ReadonlyArray<string>;
+}
+
+/** Adapt SQLite's OO1 database surface without leaking it into the index API. */
+export function wrapSqliteDatabase(raw: RawSqliteDatabase): SqliteDatabase {
+	return {
+		exec: (sql, bind) => {
+			raw.exec(bind === undefined ? { sql } : { sql, bind: [...bind] });
+		},
+		selectObjects: (sql, bind) =>
+			raw.selectObjects(sql, bind === undefined ? undefined : [...bind]),
+		transaction: (callback) => raw.transaction(callback),
+		close: () => raw.close(),
+	};
 }
 
 const CAPABILITIES: VectorIndexCapabilities = Object.freeze({
@@ -150,6 +171,20 @@ export class SqliteDatabaseVectorIndex implements VectorIndex {
 			this.#database.selectObjects("SELECT changes() AS changed")[0]?.changed,
 			"SQLite delete count",
 		);
+	}
+
+	public async deleteWhere(filters: Metadata): Promise<number> {
+		this.#assertOpen();
+		validateRequiredMetadata(filters, "filters");
+		const scoped = filterClause(filters, TABLE);
+		this.#database.exec(`DELETE FROM ${TABLE} ${scoped.sql}`, scoped.bind);
+		return changedRowCount(this.#database, "SQLite metadata delete count");
+	}
+
+	public async clear(): Promise<number> {
+		this.#assertOpen();
+		this.#database.exec(`DELETE FROM ${TABLE}`);
+		return changedRowCount(this.#database, "SQLite clear count");
 	}
 
 	public async stats(filters?: Metadata): Promise<VectorStats> {
@@ -379,6 +414,20 @@ function validateMetadata(metadata: Metadata | undefined, at: string): void {
 			throw new TypeError(`${at}.${key} must be finite`);
 		}
 	}
+}
+
+function validateRequiredMetadata(metadata: Metadata, at: string): void {
+	validateMetadata(metadata, at);
+	if (Object.keys(metadata).length === 0) {
+		throw new TypeError(`${at} must contain at least one filter`);
+	}
+}
+
+function changedRowCount(database: SqliteDatabase, at: string): number {
+	return requireFiniteNumber(
+		database.selectObjects("SELECT changes() AS changed")[0]?.changed,
+		at,
+	);
 }
 
 function vectorBytes(vector: Float32Array): Uint8Array {
