@@ -61,6 +61,28 @@ export class FlatVectorIndex {
         hits.sort((a, b) => a.distance - b.distance || compareCodeUnits(a.id, b.id));
         return hits.slice(0, limit);
     }
+    async searchByIds(query, ids) {
+        this.#assertOpen();
+        this.#assertVector(query, "query");
+        const unique = uniqueIds(ids);
+        if (unique.length === 0) {
+            return [];
+        }
+        const queryNorm = l2Norm(query);
+        const hits = [];
+        for (const id of unique) {
+            const record = this.#records.get(id);
+            if (record !== undefined) {
+                hits.push({
+                    id: record.id,
+                    distance: cosineDistance(query, queryNorm, record),
+                    metadata: { ...record.metadata },
+                });
+            }
+        }
+        hits.sort((a, b) => a.distance - b.distance || compareCodeUnits(a.id, b.id));
+        return hits;
+    }
     async delete(ids, filters) {
         this.#assertOpen();
         validateMetadata(filters, "filters");
@@ -176,6 +198,16 @@ function validateRequiredMetadata(metadata, at) {
     if (Object.keys(metadata).length === 0) {
         throw new TypeError(`${at} must contain at least one filter`);
     }
+}
+function uniqueIds(ids) {
+    const unique = new Set();
+    for (const id of ids) {
+        if (typeof id !== "string" || id.length === 0) {
+            throw new TypeError("vector record id must not be empty");
+        }
+        unique.add(id);
+    }
+    return [...unique];
 }
 function matches(metadata, filters) {
     if (filters === undefined || Object.keys(filters).length === 0) {

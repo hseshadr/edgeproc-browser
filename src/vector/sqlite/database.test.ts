@@ -37,6 +37,27 @@ async function openMemoryDatabase(): Promise<SqliteDatabase> {
 	};
 }
 
+function observeSelects(database: SqliteDatabase): {
+	readonly database: SqliteDatabase;
+	readonly vectorFullScanCount: () => number;
+} {
+	let vectorFullScanCount = 0;
+	return {
+		database: {
+			exec: (sql, bind) => database.exec(sql, bind),
+			selectObjects: (sql, bind) => {
+				if (sql.includes("vector_full_scan")) {
+					vectorFullScanCount += 1;
+				}
+				return database.selectObjects(sql, bind);
+			},
+			transaction: (callback) => database.transaction(callback),
+			close: () => database.close(),
+		},
+		vectorFullScanCount: () => vectorFullScanCount,
+	};
+}
+
 const factory: VectorIndexFactory = async (options) =>
 	new SqliteDatabaseVectorIndex(options, await openMemoryDatabase(), false);
 
@@ -89,6 +110,41 @@ describe("SqliteDatabaseVectorIndex", () => {
 			),
 		).toEqual(["safe"]);
 		expect((await index.stats()).vectorCount).toBe(2);
+		await index.dispose();
+	});
+
+	it("uses one vector scan to score a bounded 2,000-id record batch", async () => {
+		const observed = observeSelects(await openMemoryDatabase());
+		const index = new SqliteDatabaseVectorIndex(
+			{ name: "named-batch", dimension: 2 },
+			observed.database,
+			false,
+		);
+		await index.insert([
+			{
+				id: "near",
+				vector: new Float32Array([1, 0]),
+				metadata: {},
+			},
+			{
+				id: "far",
+				vector: new Float32Array([0, 1]),
+				metadata: {},
+			},
+		]);
+
+		const ids = [
+			...Array.from({ length: 1_998 }, (_, index) => `missing-${index}`),
+			"far",
+			"near",
+			"near",
+		];
+		expect(
+			(await index.searchByIds(new Float32Array([1, 0]), ids)).map(
+				({ id }) => id,
+			),
+		).toEqual(["near", "far"]);
+		expect(observed.vectorFullScanCount()).toBe(1);
 		await index.dispose();
 	});
 

@@ -1,9 +1,32 @@
 // @vitest-environment node
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createNodeSqliteVectorIndex } from "./node";
 
 describe("createNodeSqliteVectorIndex", () => {
+	it("does not emit irrelevant OPFS auto-install warnings", async () => {
+		const error = vi
+			.spyOn(console, "error")
+			.mockImplementation(() => undefined);
+		const originalLocation = Object.getOwnPropertyDescriptor(
+			globalThis,
+			"location",
+		);
+		try {
+			const index = await createNodeSqliteVectorIndex({
+				name: "node-warning-free",
+				dimension: 2,
+			});
+			await index.dispose();
+			expect(error).not.toHaveBeenCalled();
+			expect(Object.getOwnPropertyDescriptor(globalThis, "location")).toEqual(
+				originalLocation,
+			);
+		} finally {
+			error.mockRestore();
+		}
+	});
+
 	it("runs the pinned sqlite-vector runtime and exact deletion semantics in memory", async () => {
 		const index = await createNodeSqliteVectorIndex({
 			name: "node-recall",
@@ -27,6 +50,11 @@ describe("createNodeSqliteVectorIndex", () => {
 			vectorVersion: "1.1.2",
 			bundledExtensions: ["vector_version"],
 		});
+		expect(
+			(
+				await index.searchByIds(new Float32Array([1, 0]), ["remove", "keep"])
+			).map(({ id }) => id),
+		).toEqual(["keep", "remove"]);
 		expect(await index.deleteWhere({ active: false })).toBe(1);
 		expect((await index.search(new Float32Array([1, 0]), 1))[0]?.id).toBe(
 			"keep",

@@ -64,6 +64,14 @@ export class SqliteVectorIndexClient {
             ...(filters === undefined ? {} : { filters }),
         }));
     }
+    async searchByIds(query, ids) {
+        await this.#ready;
+        return (await this.#request({
+            operation: "search-by-ids",
+            query,
+            ids,
+        }));
+    }
     async delete(ids, filters) {
         await this.#ready;
         return (await this.#request({

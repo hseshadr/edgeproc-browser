@@ -52,6 +52,11 @@ export interface VectorIndex {
     read(id: string): Promise<VectorRecord | undefined>;
     /** Exact or approximate nearest neighbours, ordered by ascending distance. */
     search(query: Float32Array, limit: number, filters?: Metadata): Promise<ReadonlyArray<VectorHit>>;
+    /**
+     * Score only named records with exact cosine distance, ordered by distance then id.
+     * Unknown ids are omitted and duplicate ids are evaluated once.
+     */
+    searchByIds(query: Float32Array, ids: ReadonlyArray<string>): Promise<ReadonlyArray<VectorHit>>;
     /** Delete only named records that match the optional scope; return the count. */
     delete(ids: ReadonlyArray<string>, filters?: Metadata): Promise<number>;
     /** Delete every record matching a non-empty metadata scope; return the count. */

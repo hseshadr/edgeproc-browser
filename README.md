@@ -116,6 +116,7 @@ const index = await createSqliteVectorIndex({
 
 await index.insert([{ id: "sku-1", vector: embedding, metadata: { tenant: "a" } }]);
 const nearest = await index.search(query, 10, { tenant: "a" });
+const candidates = await index.searchByIds(query, candidateIds); // one exact batch score
 await index.deleteWhere({ tenant: "a" }); // requires a non-empty metadata scope
 await index.clear(); // exact count returned; removes every local vector
 await index.dispose();
@@ -148,7 +149,7 @@ bundle behavior:
 import { createNodeSqliteVectorIndex } from "@edgeproc/browser/vector/sqlite/node";
 
 const index = await createNodeSqliteVectorIndex({ name: "recall-eval", dimension: 384 });
-// insert/search/deleteWhere/clear have the same VectorIndex contract.
+// insert/search/searchByIds/deleteWhere/clear have the same VectorIndex contract.
 await index.dispose();
 ```
 

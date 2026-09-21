@@ -14,6 +14,8 @@ export async function assertVectorIndexConformance(factory) {
         ["replace by id", checkReplaceById],
         ["copy isolation", checkCopyIsolation],
         ["AND filters", checkAndFilters],
+        ["named-record scoring", checkSearchByIds],
+        ["named-record scoring refusal", checkSearchByIdsRefusal],
         ["empty filters are unscoped", checkEmptyFilters],
         ["scoped delete", checkScopedDelete],
         ["unscoped delete", checkUnscopedDelete],
@@ -108,6 +110,22 @@ async function checkAndFilters(index) {
     const hits = await index.search(QUERY, 100, { tenant: "a", tier: "hot" });
     assertIds(hits, ["a-hot"]);
 }
+async function checkSearchByIds(index) {
+    await index.insert(seedRows());
+    const hits = await index.searchByIds(QUERY, [
+        "b-cold",
+        "a-hot",
+        "missing",
+        "a-hot",
+    ]);
+    assertIds(hits, ["a-hot", "b-cold"]);
+    assert(hits[0]?.distance === 0, "named scoring returned the wrong distance");
+    assert((await index.searchByIds(QUERY, [])).length === 0, "named scoring must return no hits for an empty id list");
+}
+async function checkSearchByIdsRefusal(index) {
+    await assertRejects(() => index.searchByIds(new Float32Array([1, 0]), ["a-hot"]), "named scoring accepted the wrong query dimension");
+    await assertRejects(() => index.searchByIds(QUERY, [""]), "named scoring accepted an empty id");
+}
 async function checkEmptyFilters(index) {
     await index.insert(seedRows());
     assertIds(await index.search(QUERY, 100, {}), [
@@ -191,6 +209,7 @@ async function checkDisposedUseRefusal(index) {
     await assertRejects(() => index.search(QUERY, 1), "search remained usable after dispose");
     await assertRejects(() => index.deleteWhere({ tenant: "a" }), "deleteWhere remained usable after dispose");
     await assertRejects(() => index.clear(), "clear remained usable after dispose");
+    await assertRejects(() => index.searchByIds(QUERY, ["a-hot"]), "named scoring remained usable after dispose");
 }
 function seedRows() {
     return [

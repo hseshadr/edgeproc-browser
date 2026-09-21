@@ -8,17 +8,41 @@
 import { readFile } from "node:fs/promises";
 import sqlite3InitModule from "./assets/sqlite3.mjs";
 import { SqliteDatabaseVectorIndex, wrapSqliteDatabase } from "./database.js";
+let initializationQueue = Promise.resolve();
 /** Open the pinned SQLite/sqlite-vector WASM runtime in an in-memory Node DB. */
 export async function createNodeSqliteVectorIndex(options) {
     const wasm = new Uint8Array(await readFile(new URL("./assets/sqlite3.wasm", import.meta.url)));
-    const sqlite = await sqlite3InitModule({
-        wasmBinary: wasm,
-        print: () => undefined,
-        printErr: () => undefined,
-    });
+    const sqlite = await initializeNodeSqlite(wasm);
     const index = new SqliteDatabaseVectorIndex(options, wrapSqliteDatabase(new sqlite.oo1.DB(":memory:")), false);
     assertPinnedRuntime(index);
     return index;
+}
+function initializeNodeSqlite(wasm) {
+    const initialize = async () => {
+        const original = Object.getOwnPropertyDescriptor(globalThis, "location");
+        Object.defineProperty(globalThis, "location", {
+            configurable: true,
+            value: { href: "https://edgeproc.invalid/?opfs-disable&opfs-wl-disable" },
+        });
+        try {
+            return await sqlite3InitModule({
+                wasmBinary: wasm,
+                print: () => undefined,
+                printErr: () => undefined,
+            });
+        }
+        finally {
+            if (original === undefined) {
+                delete globalThis.location;
+            }
+            else {
+                Object.defineProperty(globalThis, "location", original);
+            }
+        }
+    };
+    const next = initializationQueue.then(initialize, initialize);
+    initializationQueue = next.then(() => undefined, () => undefined);
+    return next;
 }
 function assertPinnedRuntime(index) {
     const runtime = index.runtimeInfo();
