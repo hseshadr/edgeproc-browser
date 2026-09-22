@@ -5,14 +5,17 @@
 Fetch under a byte cap. Verify an ed25519 signature over canonical JSON. Bound and verify every zstd decompression. Store chunks content-addressed in OPFS. Reassemble files. Do all of it in a Web Worker, and — this is the part nobody else does — let the main thread *observe that Worker's network activity*, so "no backend calls" is a measurement instead of a promise.
 
 Zero framework dependencies. Three small runtime deps (`@noble/ed25519`,
-`@hpcc-js/wasm-zstd`, and `idb-keyval`), plus an opt-in, self-hosted SQLite vector runtime under
-the separate `@edgeproc/browser/vector/sqlite` export.
+`@hpcc-js/wasm-zstd`, and `idb-keyval`), plus one opt-in, self-hosted SQLite
+runtime shared by the separate `@edgeproc/browser/sqlite` application-state and
+`@edgeproc/browser/vector/sqlite` vector exports.
 
 ## TL;DR
 
 - Verify every downloaded byte before use, including bounded zstd expansion.
 - Cache content-addressed chunks locally and reject rollback or equivocation.
 - Observe Worker network activity from the context where it actually happens.
+- Keep portable application state in one real SQLite file, with atomic CAS
+  writes and validated backup replacement instead of raw SQL.
 - **Status:** source preview. `@edgeproc/browser` is not published to npm yet.
 
 ## The problem, in one line
@@ -122,6 +125,63 @@ await index.clear(); // exact count returned; removes every local vector
 await index.dispose();
 ```
 
+## Portable application state without raw SQL
+
+`@edgeproc/browser/sqlite` is a small application-state Lego over the same
+pinned SQLite 3.53.4 Worker and OPFS runtime. Values are bytes, so the consumer
+owns its JSON/MessagePack/Protobuf codec while this package owns durability,
+transactions, schema epochs, and portable database files:
+
+```ts
+import { createSqliteStateStore } from "@edgeproc/browser/sqlite";
+
+const state = await createSqliteStateStore({
+  name: "my-app",
+  initialSchemaVersion: 1,
+});
+
+const encoded = new TextEncoder().encode(JSON.stringify({ theme: "dark" }));
+const write = await state.put("settings", "appearance", encoded);
+
+// One transaction and one epoch for related changes. expectedEpoch is CAS:
+// a stale writer fails with SqliteStateConflictError and writes nothing.
+await state.batch(
+  [
+    { type: "put", namespace: "profiles", key: "primary", value: profileBytes },
+    { type: "delete", namespace: "drafts", key: "profile" },
+  ],
+  { expectedEpoch: write.epoch },
+);
+
+const backup = await state.exportBytes(); // actual application/x-sqlite3 bytes
+const staged = await state.stageImport(backup); // header, identity, schema, integrity
+await state.commitImport(staged.stageId, {
+  expectedEpoch: (await state.runtimeInfo()).epoch,
+}); // one transaction replaces the state table
+
+await state.dispose();
+```
+
+The public API has no `exec()` or query-string escape hatch. `get`, bounded
+`list`, `put`, `delete`, `batch`, `migrate`, `reset`, integrity, export, and
+staged import are the complete contract. An import never mutates live state
+until commit; commit rechecks the epoch and replaces rows transactionally.
+
+Persistent state uses SQLite 3.53.4's official `opfs-wl` VFS. Its SQLite file
+locks are backed by browser Web Locks, so multiple tabs/Workers can safely open
+the same store while SQLite serializes their transactions. The state Worker
+also takes one store-scoped Web Lock before reading the CAS epoch and beginning
+a mutation; without that outer lock, two SQLite connections can both validate
+the same epoch before either commits. A tab writing from an old epoch gets
+`SqliteStateConflictError` and must reload and deliberately reconcile. If
+`opfs-wl` is unavailable, opening fails instead of silently downgrading to
+unsafe shared ownership. Memory mode remains isolated per Worker. `opfs-wl`
+requires a cross-origin-isolated page: serve COOP
+`same-origin` and COEP `require-corp` (or a compatible `credentialless` policy),
+then verify every cross-origin asset remains loadable. See
+[the state-store contract](docs/sqlite-state.md) for migrations, backup
+semantics, deployment headers, and ownership details.
+
 This path uses SQLite 3.53.4 plus only the Apache-2.0 sqlite-vector 1.1.2
 extension, statically linked into a 934,257-byte WASM file. It does **not** ship
 FAISS, SQLiteAI sync/memory/network modules, an embedding model, or a backend.
@@ -193,12 +253,13 @@ Stated plainly, because an unstated gap is a lie by omission:
   corruption recovery, and pre-write handle contention; real sync-access-handle
   behavior is exercised in the Chromium tier.
 - **`worker.ts` is excluded too**, for a different reason: it is a top-level side effect, so importing it under jsdom would run it, not test it.
-- **The SQLite vector Worker is excluded from jsdom coverage for the same
-  reason.** Its real Chromium test opens OPFS, verifies extension provenance,
-  queries, disposes, reopens in a new Worker, and proves the records persisted
-  without any external request.
-- Everything counted clears the project floor: 92.99% statements, 87.12%
-  branches, 97.92% functions, and 93.86% lines (258 tests at this change).
+- **The SQLite Workers are excluded from jsdom coverage for the same reason.**
+  Real Chromium opens OPFS, verifies vector extension provenance and restart
+  persistence, then exercises application-state export/import, simultaneous
+  Worker visibility, a competing CAS write, reload persistence, and zero
+  external requests.
+- Everything counted clears the project floor: 92.87% statements, 86.32%
+  branches, 96.84% functions, and 93.73% lines (284 tests at this change).
 
 ## Consuming this package
 

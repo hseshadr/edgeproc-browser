@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A portable SQLite application-state Lego.** The opt-in
+  `@edgeproc/browser/sqlite` export provides namespaced byte rows, bounded
+  listing, atomic batches with epoch CAS, transactional schema migrations,
+  integrity checks, real SQLite byte export, staged validated import with
+  transactional table replacement, reset, and runtime facts without exposing
+  arbitrary SQL. It reuses the pinned SQLite 3.53.4 Worker runtime and its
+  official `opfs-wl` VFS for Web-Lock-coordinated multi-tab access, while the
+  existing vector adapter keeps its single-owner SAH pool. Real Chromium proves
+  cross-Worker visibility, stale-CAS rejection, persistence,
+  export/import, and zero external requests.
+
 - **A shared browser-engine contract for multiple consumers.** Signed sync now
   supports exact nullable identity pins, whole-file and safe directory-prefix
   scopes (`[]` is catalog-only; `undefined` is all files), per-verified-chunk
@@ -139,9 +150,9 @@ publication.
 
 ### Evidence
 
-- Gate green: 27 test files, 258 tests. Coverage 92.99% statements / 87.12%
-  branches / 97.92% functions / 93.86% lines. The real Chromium
-  SQLite/OPFS Worker persistence test also passes.
+- Gate green: 32 test files, 284 tests. Coverage 92.87% statements / 86.32%
+  branches / 96.84% functions / 93.73% lines. The real Chromium SQLite/OPFS
+  vector and multi-Worker state persistence tests also pass.
 - The `networkSentinel` guard was watched failing, not merely watched passing.
   Four mutations, each verified applied by md5 before its result was trusted and
   each judged on the vitest **exit code** rather than grepped output: dropping the

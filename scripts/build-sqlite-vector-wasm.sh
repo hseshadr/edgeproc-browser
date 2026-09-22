@@ -11,6 +11,7 @@ VECTOR_COMMIT=0c2223ada9dce1fa33248c8835a15f51d9a0f655
 EMSDK_IMAGE=emscripten/emsdk@sha256:27bc6267cb285223b8aebb7627bfebae7cb3ad2aaa0d5923b8aa5321793033e8
 JS_SHA256=b96e0c4faa11f7220e4916788208302944bd995ba79d01c9f2ba726280b0fbc3
 WASM_SHA256=a847545f7c58e1bdf9074cda354cfbd992c7edadf67cf4011e76297317c2565a
+OPFS_PROXY_SHA256=0afe66f23424456c0eb1de5f599075fd676d869044a017a1058888007e2dbf92
 
 curl --fail --location --silent --show-error "$SQLITE_URL" \
 	--output "$WORK/sqlite-src.zip"
@@ -53,10 +54,13 @@ docker run --rm --platform linux/amd64 \
 OUT=$WORK/sqlite-src-3530400/ext/wasm/jswasm
 test "$(openssl dgst -sha256 "$OUT/sqlite3-bundler-friendly.mjs" | awk '{print $NF}')" = "$JS_SHA256"
 test "$(openssl dgst -sha256 "$OUT/sqlite3.wasm" | awk '{print $NF}')" = "$WASM_SHA256"
+test "$(openssl dgst -sha256 "$OUT/sqlite3-opfs-async-proxy.js" | awk '{print $NF}')" = "$OPFS_PROXY_SHA256"
 
 install -m 0644 "$OUT/sqlite3-bundler-friendly.mjs" \
 	"$ROOT/src/vector/sqlite/assets/sqlite3.mjs"
 install -m 0644 "$OUT/sqlite3.wasm" \
 	"$ROOT/src/vector/sqlite/assets/sqlite3.wasm"
+install -m 0644 "$OUT/sqlite3-opfs-async-proxy.js" \
+	"$ROOT/src/vector/sqlite/assets/sqlite3-opfs-async-proxy.js"
 
 echo "Rebuilt the pinned SQLite + sqlite-vector browser runtime."

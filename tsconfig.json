@@ -13,6 +13,7 @@
 		   README's "Consuming this package" note — it is not bare-Node ESM. */
 		"moduleResolution": "Bundler",
 		"paths": {
+			"@edgeproc/browser/sqlite": ["./src/sqlite/index.ts"],
 			"@edgeproc/browser/vector/sqlite": ["./src/vector/sqlite/index.ts"],
 			"@edgeproc/browser/vector/sqlite/node": ["./src/vector/sqlite/node.ts"]
 		},
