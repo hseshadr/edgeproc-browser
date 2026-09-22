@@ -17,6 +17,7 @@ const SCRIPT = join(ROOT, "scripts", "copy-vector-assets.mjs");
 const ASSETS = [
 	"sqlite3.mjs",
 	"sqlite3.wasm",
+	"sqlite3-opfs-async-proxy.js",
 	"README.md",
 	"LICENSE.sqlite.md",
 	"LICENSE.sqlite-vector.md",

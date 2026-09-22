@@ -88,6 +88,12 @@ describe("published artefact contract", () => {
 				sha256:
 					"a847545f7c58e1bdf9074cda354cfbd992c7edadf67cf4011e76297317c2565a",
 			},
+			{
+				file: "sqlite3-opfs-async-proxy.js",
+				bytes: 41_758,
+				sha256:
+					"0afe66f23424456c0eb1de5f599075fd676d869044a017a1058888007e2dbf92",
+			},
 		] as const;
 		for (const artifact of expected) {
 			const path = join(assets, artifact.file);
@@ -103,6 +109,20 @@ describe("published artefact contract", () => {
 		]) {
 			expect(existsSync(join(assets, notice))).toBe(true);
 		}
+	});
+
+	it("ships the typed SQLite state Worker against the same pinned runtime", () => {
+		const client = join(DIST, "sqlite", "client.js");
+		const worker = join(DIST, "sqlite", "worker.js");
+		expect(readFileSync(client, "utf8")).toContain(
+			'new URL("./worker.js", import.meta.url)',
+		);
+		expect(readFileSync(worker, "utf8")).toContain(
+			'import sqlite3InitModule from "../vector/sqlite/assets/sqlite3.mjs"',
+		);
+		expect(readFileSync(join(DIST, "sqlite", "index.d.ts"), "utf8")).toContain(
+			"createSqliteStateStore",
+		);
 	});
 
 	it("keeps the SQLite WASM lazy and free of network imports", async () => {
@@ -154,6 +174,7 @@ describe("published artefact contract", () => {
 			"dist/vector/index.js",
 			"dist/vector/sqlite/index.js",
 			"dist/vector/sqlite/node.js",
+			"dist/sqlite/index.js",
 		]) {
 			const url = pathToFileURL(join(ROOT, target)).href;
 			const result = spawnSync(

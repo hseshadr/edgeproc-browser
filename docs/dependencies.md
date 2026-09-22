@@ -8,6 +8,9 @@
 | `@hpcc-js/wasm-zstd` | `^1.15.0` | bounded zstd decompression | Apache-2.0 |
 | `idb-keyval` | `^6.3.0` | small IndexedDB transaction helpers | Apache-2.0 |
 
-The optional `@edgeproc/browser/vector/sqlite` subpath carries its own exact
-SQLite/sqlite-vector versions, artifact hashes, rebuild recipe, and license
-texts in `src/vector/sqlite/assets/`.
+The optional `@edgeproc/browser/sqlite` and
+`@edgeproc/browser/vector/sqlite` subpaths share one self-hosted runtime. It
+carries exact SQLite/sqlite-vector versions, artifact hashes, a rebuild recipe,
+and license texts in `src/vector/sqlite/assets/`. The application-state API does
+not call the vector extension; sharing the artifact avoids shipping a second
+SQLite WASM binary when a consumer uses both Legos.

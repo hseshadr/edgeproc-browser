@@ -10,6 +10,7 @@ await mkdir(destination, { recursive: true });
 for (const file of [
 	"sqlite3.mjs",
 	"sqlite3.wasm",
+	"sqlite3-opfs-async-proxy.js",
 	"README.md",
 	"LICENSE.sqlite.md",
 	"LICENSE.sqlite-vector.md",

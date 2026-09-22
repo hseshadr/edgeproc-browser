@@ -1,13 +1,16 @@
 # Minimal SQLite + sqlite-vector browser runtime
 
-These are the two runtime files used by `@edgeproc/browser/vector/sqlite`:
+These runtime files are shared by `@edgeproc/browser/vector/sqlite` and
+`@edgeproc/browser/sqlite`:
 
 - `sqlite3.mjs`: the official SQLite bundler-friendly JavaScript loader.
 - `sqlite3.wasm`: SQLite 3.53.4 with only sqlite-vector 1.1.2 statically linked.
+- `sqlite3-opfs-async-proxy.js`: SQLite's official OPFS proxy used by the
+  multi-tab `opfs-wl` VFS. The vector adapter continues using its SAH pool.
 
 The build intentionally excludes SQLiteAI sync, memory, and network modules. It
 also excludes the stock SQLiteAI WASM bundle. `scripts/build-sqlite-vector-wasm.sh`
-reproduces both files with a digest-pinned Emscripten image.
+reproduces all three files with a digest-pinned Emscripten image.
 
 ## Pinned sources
 
@@ -23,9 +26,9 @@ reproduces both files with a digest-pinned Emscripten image.
 | --- | ---: | --- |
 | `sqlite3.mjs` | 809,712 | `b96e0c4faa11f7220e4916788208302944bd995ba79d01c9f2ba726280b0fbc3` |
 | `sqlite3.wasm` | 934,257 | `a847545f7c58e1bdf9074cda354cfbd992c7edadf67cf4011e76297317c2565a` |
+| `sqlite3-opfs-async-proxy.js` | 41,758 | `0afe66f23424456c0eb1de5f599075fd676d869044a017a1058888007e2dbf92` |
 
 SQLite is public domain; its blessing/license text is preserved in
 `LICENSE.sqlite.md`. sqlite-vector 1.1.2 is Apache-2.0; its license is preserved
 in `LICENSE.sqlite-vector.md`. `THIRD_PARTY_NOTICES.md` preserves the notices
 for FP16, Emscripten, and the linked musl runtime.
-
