@@ -300,14 +300,14 @@ Stated plainly, because an unstated gap is a lie by omission:
   in-memory OPFS double covers dual-slot promotion, zero-byte cleanup,
   corruption recovery, and pre-write handle contention; real sync-access-handle
   behavior is exercised in the Chromium tier.
-- **`worker.ts` is excluded too**, for a different reason: it is a top-level side effect, so importing it under jsdom would run it, not test it.
+- **`worker.ts` is excluded too**, for a different reason: it is a top-level side effect, so importing it under jsdom would run it, not test it. `test/browser/engine-keyring.spec.ts` drives the built Worker in real Chromium through the raw-key, keyring, and revoked-signer trust roots.
 - **The SQLite Workers are excluded from jsdom coverage for the same reason.**
   Real Chromium opens OPFS, verifies vector extension provenance and restart
   persistence, then exercises application-state export/import, simultaneous
   Worker visibility, a competing CAS write, reload persistence, and zero
   external requests.
-- Everything counted clears the project floor: 93.2% statements, 86.72%
-  branches, 96.84% functions, and 93.92% lines (288 tests at this change).
+- Everything counted clears the project floor: 93.63% statements, 87.82%
+  branches, 97.01% functions, and 94.3% lines (400 tests at this change).
 
 ## Consuming this package
 
@@ -358,7 +358,8 @@ domain catalog selection and result-shape adapters remain in consumers.
 ```bash
 pnpm install
 pnpm gate      # lint -> typecheck -> build -> test (exactly what CI runs)
-pnpm test:browser # real Chromium: sqlite-vector + Worker + OPFS reopen
+pnpm test:browser # real Chromium: sqlite-vector + Worker + OPFS reopen, and the
+                  # built engine Worker under a raw key, a keyring, and a revoked signer
 ```
 
 The build runs *before* the tests on purpose: `files: ["dist"]` means consumers get only build output, so the gate verifies the committed artifact is fresh and `test/dist-contract.test.ts` loads its public exports with native Node ESM. A claim that holds in `src/` and fails in `dist/` is invisible to every source-level test.
