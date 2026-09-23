@@ -50,7 +50,8 @@ export declare function loadTrustRoot(url: string, fetchBytes: FetchBytes): Prom
  *
  * With `keyId`: revoked -> {@link KeyRevokedError}; not in the ring ->
  * {@link UnknownKeyError}; otherwise ONLY that key is tried. Without one: any
- * unrevoked key may verify, and a revoked key's signature never does.
+ * unrevoked key may verify, and a revoked key's signature never does (it is
+ * reported as {@link KeyRevokedError} when the revoked key is still listed).
  * Every refusal is a {@link SignatureError}.
  */
 export declare function verifyWithKeyring(keyring: Keyring, message: Uint8Array, signatureBase64: string, keyId?: string | null): Promise<void>;

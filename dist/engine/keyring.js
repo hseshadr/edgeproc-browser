@@ -189,7 +189,8 @@ export async function loadTrustRoot(url, fetchBytes) {
  *
  * With `keyId`: revoked -> {@link KeyRevokedError}; not in the ring ->
  * {@link UnknownKeyError}; otherwise ONLY that key is tried. Without one: any
- * unrevoked key may verify, and a revoked key's signature never does.
+ * unrevoked key may verify, and a revoked key's signature never does (it is
+ * reported as {@link KeyRevokedError} when the revoked key is still listed).
  * Every refusal is a {@link SignatureError}.
  */
 export async function verifyWithKeyring(keyring, message, signatureBase64, keyId) {
@@ -203,17 +204,26 @@ export async function verifyWithKeyring(keyring, message, signatureBase64, keyId
         await verifyEd25519(key.publicKey, message, signatureBase64);
         return;
     }
-    for (const key of keyring.keys) {
-        if (revoked.has(key.keyId))
-            continue;
+    const unrevoked = keyring.keys.filter((key) => !revoked.has(key.keyId));
+    if (await anyVerifies(unrevoked, message, signatureBase64))
+        return;
+    // Never accepted — only named, so a rotation failure is diagnosable.
+    const stillListed = keyring.keys.filter((key) => revoked.has(key.keyId));
+    if (await anyVerifies(stillListed, message, signatureBase64)) {
+        throw new KeyRevokedError("pointer is signed by a revoked key");
+    }
+    throw new SignatureError();
+}
+async function anyVerifies(keys, message, signatureBase64) {
+    for (const key of keys) {
         try {
             await verifyEd25519(key.publicKey, message, signatureBase64);
-            return;
+            return true;
         }
         catch {
             // verifyEd25519 only ever throws SignatureError: try the next key.
         }
     }
-    throw new SignatureError();
+    return false;
 }
 //# sourceMappingURL=keyring.js.map

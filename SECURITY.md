@@ -69,7 +69,10 @@ Important integration rules:
   from the active one in any signed field at the same sequence.
 - **Revocation.** Listing a key id in `revoked` makes every signature by that
   key fail: a pointer naming it fails with `KeyRevokedError`, and a pointer
-  without `key_id` is only tried against unrevoked keys. A cached bundle whose
+  without `key_id` is only accepted under unrevoked keys (if it verifies only
+  under a revoked key that the ring still lists, it fails with
+  `KeyRevokedError`; if the revoked key is no longer listed, with
+  `SignatureError`). A cached bundle whose
   pointer was signed by a now-revoked key is refused for offline serving
   (fail closed), yet that pointer remains the anti-rollback floor, so revoking
   a key never lets an older release back in.

@@ -367,9 +367,17 @@ describe("verification under a keyring", () => {
 
 	it("never accepts a key_id-less signature from a revoked key", async () => {
 		const { a, b, rotated } = await rings();
+		// A is revoked but still listed: refused, and named as revoked.
 		await expect(
 			verifyWithKeyring(rotated, message, await sign(message, a)),
-		).rejects.toBeInstanceOf(SignatureError);
+		).rejects.toBeInstanceOf(KeyRevokedError);
+		// A is revoked and no longer listed: nothing can tell who signed it.
+		const dropped = await parseTrustRoot(
+			json({ schema: KEYRING_SCHEMA, keys: [b.entry], revoked: [a.keyId] }),
+		);
+		const refusal = verifyWithKeyring(dropped, message, await sign(message, a));
+		await expect(refusal).rejects.toBeInstanceOf(SignatureError);
+		await expect(refusal).rejects.not.toBeInstanceOf(KeyRevokedError);
 		await expect(
 			verifyWithKeyring(rotated, message, await sign(message, b)),
 		).resolves.toBeUndefined();

@@ -83,7 +83,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `key_id` (16 lowercase hex of sha256 of the signer's raw public key) selects
   the one key allowed to verify — revoked fails with `KeyRevokedError`,
   unlisted with `UnknownKeyError`, both `SignatureError`s — and without it any
-  unrevoked key may verify while a revoked key never does. `expires_at` (Unix
+  unrevoked key may verify while a revoked key never does (reported as
+  `KeyRevokedError` while the revoked key is still listed). `expires_at` (Unix
   seconds, positive safe integer) makes a network-fetched pointer at or past
   its deadline fail with `PointerExpiredError` (an `IntegrityError`) after
   signature verification. Offline, an already-verified cached bundle whose

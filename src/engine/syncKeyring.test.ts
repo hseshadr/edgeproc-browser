@@ -266,6 +266,11 @@ describe("key selection", () => {
 			syncIndex(
 				keyringArgs(await ring([a, b], [a]), origin, new MemoryCacheStore()),
 			),
+		).rejects.toBeInstanceOf(KeyRevokedError);
+		await expect(
+			syncIndex(
+				keyringArgs(await ring([b], [a]), origin, new MemoryCacheStore()),
+			),
 		).rejects.toBeInstanceOf(SignatureError);
 	});
 
@@ -547,7 +552,7 @@ describe("rotation A -> B keeps the rollback floor", () => {
 			syncIndex(
 				keyringArgs(await ring([b, a], [a]), { fetchBytes: offline }, store),
 			),
-		).rejects.toBeInstanceOf(SignatureError);
+		).rejects.toBeInstanceOf(KeyRevokedError);
 	});
 
 	it("keeps the floor after a revoked cache was refused", async () => {
