@@ -258,8 +258,8 @@ Stated plainly, because an unstated gap is a lie by omission:
   persistence, then exercises application-state export/import, simultaneous
   Worker visibility, a competing CAS write, reload persistence, and zero
   external requests.
-- Everything counted clears the project floor: 92.87% statements, 86.32%
-  branches, 96.84% functions, and 93.73% lines (284 tests at this change).
+- Everything counted clears the project floor: 93.2% statements, 86.72%
+  branches, 96.84% functions, and 93.92% lines (288 tests at this change).
 
 ## Consuming this package
 

@@ -1,6 +1,8 @@
 import { Zstd } from "@hpcc-js/wasm-zstd";
+import { keygenAsync, signAsync } from "@noble/ed25519";
 import { describe, expect, it } from "vitest";
-import { sha256Hex } from "./crypto.js";
+import { canonicalBytes, type JsonValue } from "./canonical.js";
+import { SignatureError, sha256Hex, verifyEd25519 } from "./crypto.js";
 import { NetworkError } from "./fetchBytes.js";
 import { IntegrityError } from "./integrity.js";
 import { MemoryCacheStore } from "./memoryStore.js";
@@ -505,6 +507,133 @@ describe("anti-rollback fails closed", () => {
 		await syncIndex({ ...origin, baseUrl: "/o", store, verify: passVerify });
 
 		expect((await store.readActive())?.version).toBe("v2");
+	});
+});
+
+/**
+ * The anti-rollback floor must survive a signature failure on the STORED
+ * pointer. A key change (planned rotation, or a swapped pinned key) makes the
+ * durable active pointer unverifiable under the current key; clearing it used
+ * to reset the floor, so the next pointer — including an OLD release re-signed
+ * by the new key — was promoted with no freshness comparison at all. edge-proc's
+ * `cas.py` never re-verifies the stored pointer, so its floor survives; the two
+ * runtimes must agree.
+ */
+describe("the rollback floor survives a key change", () => {
+	async function signedBy(
+		secretKey: Uint8Array,
+		pointer: VersionPointer,
+	): Promise<string> {
+		const message = canonicalBytes(pointer as unknown as JsonValue, {
+			exclude: { signature: true },
+		});
+		const signature = await signAsync(message, secretKey);
+		return btoa(String.fromCharCode(...signature));
+	}
+
+	async function rotatedClient(): Promise<{
+		readonly store: MemoryCacheStore;
+		readonly keyB: { readonly secretKey: Uint8Array };
+		readonly verifyB: Verify;
+		readonly activeA: VersionPointer;
+	}> {
+		const keyA = await keygenAsync();
+		const keyB = await keygenAsync();
+		const pinned = await originFor(
+			emptyManifest({ version: "v10" }),
+			new Map(),
+			10,
+		);
+		const activeA: VersionPointer = {
+			...pinned.pointer,
+			signature: await signedBy(keyA.secretKey, pinned.pointer),
+		};
+		const store = new MemoryCacheStore();
+		await store.promote(activeA);
+		const verifyB: Verify = (message, signature) =>
+			verifyEd25519(keyB.publicKey, message, signature);
+		return { store, keyB, verifyB, activeA };
+	}
+
+	async function reSigned(
+		secretKey: Uint8Array,
+		version: string,
+		sequence: number,
+	): Promise<SyntheticOrigin> {
+		const origin = await originFor(
+			emptyManifest({ version }),
+			new Map(),
+			sequence,
+		);
+		const signature = await signedBy(secretKey, origin.pointer);
+		return {
+			...origin,
+			pointer: { ...origin.pointer, signature },
+			fetchBytes: pointerFetch(origin, { signature }),
+		};
+	}
+
+	it("refuses an older release re-signed by the new key as a rollback", async () => {
+		const { store, keyB, verifyB, activeA } = await rotatedClient();
+		const replay = await reSigned(keyB.secretKey, "v5", 5);
+		const requested: string[] = [];
+
+		await expect(
+			syncIndex({
+				baseUrl: "/o",
+				store,
+				fetchBytes: (url, options) => {
+					requested.push(url);
+					return replay.fetchBytes(url, options);
+				},
+				verify: verifyB,
+			}),
+		).rejects.toBeInstanceOf(RollbackError);
+		expect(requested).toEqual(["/o/latest"]);
+		expect(await store.readActive()).toEqual(activeA);
+	});
+
+	it("refuses an equal-sequence fork re-signed by the new key", async () => {
+		const { store, keyB, verifyB } = await rotatedClient();
+		const fork = await reSigned(keyB.secretKey, "v10-fork", 10);
+
+		await expect(
+			syncIndex({
+				baseUrl: "/o",
+				store,
+				fetchBytes: fork.fetchBytes,
+				verify: verifyB,
+			}),
+		).rejects.toBeInstanceOf(RollbackError);
+	});
+
+	it("promotes a fresher release signed by the new key", async () => {
+		const { store, keyB, verifyB } = await rotatedClient();
+		const next = await reSigned(keyB.secretKey, "v11", 11);
+
+		const result = await syncIndex({
+			baseUrl: "/o",
+			store,
+			fetchBytes: next.fetchBytes,
+			verify: verifyB,
+		});
+
+		expect(result.version).toBe("v11");
+		expect(await store.readActive()).toEqual(next.pointer);
+	});
+
+	it("never serves the cached bundle the current key cannot verify", async () => {
+		const { store, verifyB, activeA } = await rotatedClient();
+
+		await expect(
+			syncIndex({
+				baseUrl: "/o",
+				store,
+				fetchBytes: () => Promise.reject(new NetworkError("offline")),
+				verify: verifyB,
+			}),
+		).rejects.toBeInstanceOf(SignatureError);
+		expect(await store.readActive()).toEqual(activeA);
 	});
 });
 

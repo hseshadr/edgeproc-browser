@@ -43,6 +43,15 @@ Important integration rules:
   Layout input is bounded and cannot select arbitrary code or callbacks.
 - OPFS content and the IndexedDB rollback pointer are untrusted durable state.
   They are revalidated before use; equal-sequence disagreement fails closed.
+- The stored active pointer is the anti-rollback floor even when the currently
+  pinned key cannot verify it (after a key rotation, or a swapped key), so a key
+  change never resets the floor: an older release re-signed by a new key is
+  refused as a rollback. The floor only refuses; the cached bundle is served
+  offline only under a signature the current key verifies. A key rotation must
+  therefore keep the publisher's `sequence` increasing. Rotation is a
+  coordinated re-sign plus an app release shipping the new public key; there is
+  no keyring, revocation list, or pointer expiry yet (see edge-proc's
+  `docs/OPERATIONS.md`).
 - Worker error messages can include URLs or producer-controlled identifiers.
   Do not render them as HTML and do not place secrets in bundle paths or URLs.
 - The network sentinel is evidence about requests, not an access-control
