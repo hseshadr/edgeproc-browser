@@ -102,7 +102,10 @@ async function trustedKey(value) {
 }
 function decodeDocument(bytes) {
     try {
-        return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+        return JSON.parse(
+        // ignoreBOM keeps a leading U+FEFF in the text so JSON.parse refuses
+        // it, matching edge-proc's strict parser byte for byte.
+        new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes));
     }
     catch (cause) {
         throw new KeyringError("trust root is neither a 32-byte key nor a JSON keyring", { cause });

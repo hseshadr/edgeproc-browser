@@ -142,7 +142,9 @@ async function trustedKey(value: unknown): Promise<TrustedKey> {
 function decodeDocument(bytes: Uint8Array): unknown {
 	try {
 		return JSON.parse(
-			new TextDecoder("utf-8", { fatal: true }).decode(bytes),
+			// ignoreBOM keeps a leading U+FEFF in the text so JSON.parse refuses
+			// it, matching edge-proc's strict parser byte for byte.
+			new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes),
 		) as unknown;
 	} catch (cause) {
 		throw new KeyringError(

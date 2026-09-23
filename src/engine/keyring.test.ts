@@ -129,6 +129,18 @@ describe("trust root: JSON keyring", () => {
 		await expect(parseTrustRoot(oversized)).rejects.toThrow(/exceeds/iu);
 	});
 
+	it("refuses a leading byte-order mark, as edge-proc does", async () => {
+		const b = await party(SEED_B);
+		const document = json({
+			schema: KEYRING_SCHEMA,
+			keys: [b.entry],
+			revoked: [],
+		});
+		const withBom = new Uint8Array([0xef, 0xbb, 0xbf, ...document]);
+		await expect(parseTrustRoot(document)).resolves.toBeDefined();
+		await expect(parseTrustRoot(withBom)).rejects.toBeInstanceOf(KeyringError);
+	});
+
 	it("refuses invalid UTF-8", async () => {
 		await expect(
 			parseTrustRoot(new Uint8Array([0x7b, 0xff, 0xfe, 0x7d, 0x20])),
