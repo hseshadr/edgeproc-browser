@@ -244,6 +244,35 @@ describe("persistent cache contract", () => {
 		await expect(selected.readActive()).rejects.toThrow(/floors disagree/iu);
 	});
 
+	it("round-trips signed key_id/expires_at through both durable stores", async () => {
+		const signed: VersionPointer = {
+			...pointer(3),
+			key_id: "34750f98bd59fcfc",
+			expires_at: 1_767_225_600,
+		};
+		const primary = await IndexedDbCacheStore.open(`${database}-primary`);
+		const floor = await IndexedDbCacheStore.open(database);
+		const selected = await openPersistentCacheStore({
+			openers: {
+				openOpfs: () => Promise.resolve(primary),
+				openIndexedDb: () => Promise.resolve(floor),
+			},
+		});
+		await selected.promote(pointer(2));
+		await selected.promote(signed);
+
+		// A reopened floor returns every signed field, so the cached pointer
+		// still verifies and its deadline still applies offline.
+		expect(
+			await (await IndexedDbCacheStore.open(database)).readActive(),
+		).toEqual(signed);
+		expect(await selected.readActive()).toEqual(signed);
+		// Same sequence, different expiry is disagreement, not the same pointer.
+		await expect(
+			selected.promote({ ...signed, expires_at: 1_767_225_601 }),
+		).rejects.toThrow(/refusing to promote/iu);
+	});
+
 	it("translates legacy quota failures to a stable storage error", async () => {
 		const store = await IndexedDbCacheStore.open(database);
 		const failure = Object.assign(new Error("legacy quota reached"), {

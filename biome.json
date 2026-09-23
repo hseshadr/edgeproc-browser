@@ -12,6 +12,7 @@
 			"!dist",
 			"!**/coverage",
 			"!docs/architecture",
+			"!src/engine/__fixtures__/keyring_vectors.json",
 			"!src/vector/sqlite/assets/sqlite3.mjs",
 			"!src/vector/sqlite/assets/sqlite3-opfs-async-proxy.js",
 			"!src/vector/sqlite/assets/sqlite3.wasm",

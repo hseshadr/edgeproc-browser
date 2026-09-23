@@ -72,6 +72,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **Key rotation, revocation, and pointer expiry.** The trust-root URL may now
+  serve a strict `edgeproc.keyring/v1` JSON keyring
+  (`{"schema","keys":[{"key_id","public_key"}],"revoked"}`, bounded to 64 KiB
+  before parsing, unknown fields rejected, each `key_id` checked against
+  sha256 of its key) instead of a raw key; exactly 32 bytes is still read as
+  the legacy single key, so existing deployments are unchanged. The
+  `VersionPointer` gains two OPTIONAL signed fields, folded into the preimage
+  only when present so every existing pointer keeps its exact signed bytes:
+  `key_id` (16 lowercase hex of sha256 of the signer's raw public key) selects
+  the one key allowed to verify — revoked fails with `KeyRevokedError`,
+  unlisted with `UnknownKeyError`, both `SignatureError`s — and without it any
+  unrevoked key may verify while a revoked key never does (reported as
+  `KeyRevokedError` while the revoked key is still listed). `expires_at` (Unix
+  seconds, positive safe integer) makes a network-fetched pointer at or past
+  its deadline fail with `PointerExpiredError` (an `IntegrityError`) after
+  signature verification. Offline, an already-verified cached bundle whose
+  pointer has expired is still served, with `expired: true` on the result, so
+  offline PWAs keep working and can say so; a cached pointer signed by a
+  since-revoked key is refused for serving but still acts as the rollback
+  floor. `syncIndex` accepts either `verify` (unchanged) or `keyring`, plus an
+  injectable `now()` clock. Every new error maps to the existing `integrity`
+  Worker error code; no storage key or format changes, and durable records
+  without the new fields load as before. Cross-runtime vectors generated from
+  fixed seeds (`src/engine/__fixtures__/keyring_vectors.json`,
+  `scripts/generate-keyring-vectors.mjs`) pin the key ids, preimages,
+  signatures, and verdicts shared with edge-proc.
+
 - **The anti-rollback floor now survives a key change.** `syncIndex` used to
   re-verify the durable active pointer under the currently pinned key and, on a
   `SignatureError`, clear it and treat the client as never having synced. Any

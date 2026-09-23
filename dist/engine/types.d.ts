@@ -35,6 +35,17 @@ export interface VersionPointer {
      * may migrate once; after that, lower/missing counters and equal-sequence
      * different identities are rejected before manifest fetch. */
     readonly sequence: number;
+    /** Optional signed signer identity: the first 16 lowercase hex chars of
+     * sha256(raw 32-byte Ed25519 public key). When present, ONLY that keyring
+     * key may verify the pointer; a revoked or unknown id fails closed. Null or
+     * absent stays out of the signature preimage, so older pointers keep their
+     * exact bytes. */
+    readonly key_id?: string | null;
+    /** Optional signed deadline in Unix seconds (a safe integer > 0). A
+     * network-fetched pointer is refused once `now >= expires_at`; an expired
+     * pointer already cached is still served offline, flagged `expired`. Null
+     * or absent stays out of the signature preimage. */
+    readonly expires_at?: number | null;
     /** ed25519 over canonicalBytes(self, exclude {signature}), base64. */
     readonly signature: string;
 }
@@ -45,6 +56,11 @@ export interface SyncResult {
     readonly chunksFetched: number;
     readonly chunksReused: number;
     readonly bytesFetched: number;
+    /** Present, and `true`, only when an offline sync served an already-verified
+     * cached bundle whose signed pointer has passed its `expires_at`. The bytes
+     * are intact and authentic, but the publisher no longer vouches that they
+     * are current: surface that to the user. Absent in every other case. */
+    readonly expired?: true;
 }
 export type CacheBackend = "indexeddb" | "opfs+indexeddb";
 export type StoragePreference = "auto" | "indexeddb";

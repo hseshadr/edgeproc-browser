@@ -15,7 +15,8 @@
 //
 // THE INVARIANT EVERY MODULE SERVES: fail closed. An unverifiable byte is not
 // a degraded byte, it is a rejected one. Every path that cannot prove integrity
-// throws (SignatureError, IntegrityError, RollbackError, SyncCapError) rather
+// throws (SignatureError, IntegrityError, RollbackError, SyncCapError, and
+// their keyring/expiry subclasses) rather
 // than returning something the caller might use.
 
 // --- canonical JSON: the exact bytes a signature is taken over ---
@@ -56,6 +57,21 @@ export {
 	MAX_DECOMPRESSED_CHUNK_BYTES,
 	verifyPlaintext,
 } from "./engine/integrity.js";
+// --- the trust root: a raw key or a keyring with rotation + revocation ---
+export {
+	assertKeyring,
+	deriveKeyId,
+	KEYRING_SCHEMA,
+	KeyRevokedError,
+	type Keyring,
+	KeyringError,
+	loadTrustRoot,
+	MAX_TRUST_ROOT_BYTES,
+	parseTrustRoot,
+	type TrustedKey,
+	UnknownKeyError,
+	verifyWithKeyring,
+} from "./engine/keyring.js";
 // --- content-addressed stores: in-memory (tests, ephemeral) and OPFS (real) ---
 export { MemoryCacheStore } from "./engine/memoryStore.js";
 // --- the network sentinel: makes a Worker's traffic visible to the tab ---
@@ -97,8 +113,11 @@ export type {
 } from "./engine/protocol.js";
 // --- the sync state machine + file reassembly ---
 export {
+	type KeyringSyncArgs,
 	MAX_CHUNK_RETRY_BUDGET_MS,
 	materializeFile,
+	PointerExpiredError,
+	pointerSigningBytes,
 	RollbackError,
 	type SyncArgs,
 	SyncCapError,

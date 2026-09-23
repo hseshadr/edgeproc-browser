@@ -15,7 +15,8 @@
 //
 // THE INVARIANT EVERY MODULE SERVES: fail closed. An unverifiable byte is not
 // a degraded byte, it is a rejected one. Every path that cannot prove integrity
-// throws (SignatureError, IntegrityError, RollbackError, SyncCapError) rather
+// throws (SignatureError, IntegrityError, RollbackError, SyncCapError, and
+// their keyring/expiry subclasses) rather
 // than returning something the caller might use.
 // --- canonical JSON: the exact bytes a signature is taken over ---
 export { canonicalBytes } from "./engine/canonical.js";
@@ -28,6 +29,8 @@ export { DEFAULT_MAX_FETCH_BYTES, FETCH_TIMEOUT_MS, fetchBytes, NetworkError, Re
 export { IndexedDbCacheStore, resolveIndexedDbLayout, } from "./engine/indexedDbStore.js";
 // --- integrity: bounded decompression + content-address verification ---
 export { decompressAndVerify, IntegrityError, MAX_DECOMPRESSED_CHUNK_BYTES, verifyPlaintext, } from "./engine/integrity.js";
+// --- the trust root: a raw key or a keyring with rotation + revocation ---
+export { assertKeyring, deriveKeyId, KEYRING_SCHEMA, KeyRevokedError, KeyringError, loadTrustRoot, MAX_TRUST_ROOT_BYTES, parseTrustRoot, UnknownKeyError, verifyWithKeyring, } from "./engine/keyring.js";
 // --- content-addressed stores: in-memory (tests, ephemeral) and OPFS (real) ---
 export { MemoryCacheStore } from "./engine/memoryStore.js";
 // --- the network sentinel: makes a Worker's traffic visible to the tab ---
@@ -38,7 +41,7 @@ export { installNetworkSentinel, isNetworkSentinelReport, NETWORK_SENTINEL_CHANN
 export { canPromotePointer, OpfsCacheStore, selectHighestPointer, } from "./engine/opfsStore.js";
 export { openPersistentCacheStore, requestPersistentStorage, } from "./engine/persistentStore.js";
 // --- the sync state machine + file reassembly ---
-export { MAX_CHUNK_RETRY_BUDGET_MS, materializeFile, RollbackError, SyncCapError, syncIndex, } from "./engine/sync.js";
+export { MAX_CHUNK_RETRY_BUDGET_MS, materializeFile, PointerExpiredError, pointerSigningBytes, RollbackError, SyncCapError, syncIndex, } from "./engine/sync.js";
 // --- typed Worker failures (a Worker that dies during init never replies) ---
 export { DEFAULT_EMBED_TIMEOUT_MS, DEFAULT_REQUEST_TIMEOUT_MS, WorkerCrashError, WorkerTimeoutError, } from "./engine/workerFault.js";
 // --- zstd with an explicit expansion bound (a decompression bomb is a bug) ---
