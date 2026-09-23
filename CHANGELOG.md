@@ -70,6 +70,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Covered by `test/publish-preflight.test.ts`, which drives every refusal and the
   accept case against real throwaway repos.
 
+### Security
+
+- **The anti-rollback floor now survives a key change.** `syncIndex` used to
+  re-verify the durable active pointer under the currently pinned key and, on a
+  `SignatureError`, clear it and treat the client as never having synced. Any
+  key change — a planned rotation or a swapped pinned key — therefore reset the
+  floor, and the next pointer, including an OLD release re-signed by the new
+  key, was promoted with no freshness comparison. The stored pointer is now the
+  floor whether or not the current key can verify it (it only ever refuses,
+  never grants trust); serving the cached bundle offline still requires a
+  signature valid under the current key, so an unverifiable cache fails closed
+  instead of being served. This matches edge-proc's `cas.py`, which never
+  re-verifies its stored pointer. No storage key or format change. Rotations
+  must keep `sequence` increasing; a corrupted durable counter can only cause a
+  `RollbackError`, recovered by an explicit cache clear.
+
 ### Fixed
 
 - **Transient chunk outages no longer abort a cold sync immediately.** Only

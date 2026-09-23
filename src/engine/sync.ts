@@ -2,7 +2,7 @@
 // bounded before allocation/fetch, and promotion remains the final operation.
 
 import { canonicalBytes, type JsonValue } from "./canonical.js";
-import { SignatureError, sha256Hex } from "./crypto.js";
+import { sha256Hex } from "./crypto.js";
 import { NetworkError } from "./fetchBytes.js";
 import { IntegrityError, MAX_DECOMPRESSED_CHUNK_BYTES } from "./integrity.js";
 import { isQuotaError } from "./storageError.js";
@@ -709,28 +709,32 @@ async function syncFromCache(
 	};
 }
 
-async function authenticatedActive(
+/**
+ * The anti-rollback floor: the durable active pointer, read WITHOUT re-verifying
+ * its signature under the currently pinned key.
+ *
+ * Re-verifying it and discarding it on a SignatureError would let any key
+ * change (a planned rotation, or a swapped pinned key) silently reset the
+ * floor: the next pointer — including an OLD release re-signed by the new key —
+ * would then be promoted with no freshness comparison at all. The floor only
+ * ever REFUSES; it never grants trust. Serving the cached bundle still demands
+ * a signature valid under the current key (`syncFromCache`), so a pointer the
+ * current key cannot verify is a floor but never a source of bytes. This
+ * matches edge-proc's `cas.py`, which never re-verifies its stored pointer.
+ *
+ * The cost is deliberate and fail-closed: a corrupted or tampered durable
+ * counter can only make the client refuse updates (a `RollbackError`, recovered
+ * by an explicit cache clear), never accept an older release.
+ */
+async function rollbackFloor(
 	store: CacheStore,
 	args: SyncArgs,
-	verify: Verify,
 ): Promise<VersionPointer | null> {
-	for (let attempt = 0; attempt < 4; attempt += 1) {
-		const active = await store.readActive();
-		if (active === null) return null;
-		assertVersionPointer(active, false);
-		try {
-			await verify(pointerSigningBytes(active), active.signature);
-		} catch (error) {
-			if (!(error instanceof SignatureError)) throw error;
-			if (await store.clearActiveIf(active)) return null;
-			continue;
-		}
-		assertExpectedIdentity(active, args);
-		return active;
-	}
-	throw new IntegrityError(
-		"persistent active pointer changed during verification",
-	);
+	const active = await store.readActive();
+	if (active === null) return null;
+	assertVersionPointer(active, false);
+	assertExpectedIdentity(active, args);
+	return active;
 }
 
 export async function syncIndex(args: SyncArgs): Promise<SyncResult> {
@@ -748,7 +752,7 @@ export async function syncIndex(args: SyncArgs): Promise<SyncResult> {
 	}
 	assertExpectedIdentity(pointer, args);
 	report(args, { phase: "pointer", version: pointer.version });
-	const active = await authenticatedActive(store, args, verify);
+	const active = await rollbackFloor(store, args);
 	const refusal = active === null ? null : downgradeReason(pointer, active);
 	if (refusal !== null) {
 		throw new RollbackError(refusal);
