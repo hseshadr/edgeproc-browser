@@ -120,6 +120,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   9-second backoff ceiling. Integrity, signature, storage, and rollback
   failures remain fail-closed with no retry.
 
+- **The README now follows the portfolio template.** It has a plain-language first screen, an
+  "At a glance" summary, and a 14-line tamper example whose output is pasted from a real run.
+  All earlier content moved below the fold. The `package.json` description is now the
+  tagline, and `test/readme.contract.test.ts` pins the first screen, the architecture-map
+  link, and every relative link. The previous README's demo transcript also left out the
+  `bytes fetched` line that `pnpm demo` prints.
+
 - **CONTRIBUTING claimed things that were not true of this package.** It said
   coverage was enforced at 100% (`vitest.config.ts` enforces 90/90/90/85) because
   "the library is pure logic with no I/O" (its subject is OPFS, Workers and

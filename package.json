@@ -2,7 +2,7 @@
 	"name": "@edgeproc/browser",
 	"version": "0.1.0",
 	"type": "module",
-	"description": "The local-processing substrate of edge-proc, for the browser: sync a signed, content-addressed bundle into OPFS (ed25519 + sha256, fail-closed), run it in a Worker, and see the Worker's network traffic from the main thread.",
+	"description": "For web developers: load data into a browser tab only if it's provably yours and unaltered, then keep using it offline.",
 	"keywords": [
 		"local-first",
 		"offline-first",
