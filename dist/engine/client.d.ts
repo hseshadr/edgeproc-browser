@@ -36,7 +36,9 @@ export type EngineStorageOptions = Pick<EngineSyncOptions, "storageBackend" | "c
 export declare class EngineClient {
     #private;
     constructor(worker: EngineWorkerLike, options?: EngineClientOptions);
-    /** Sync the signed bundle at `baseUrl`, pinning the raw pubkey at `pubkeyUrl`. */
+    /** Sync the signed bundle at `baseUrl`, pinning the trust root at
+     * `pubkeyUrl`: a raw 32-byte Ed25519 key, or an `edgeproc.keyring/v1` JSON
+     * keyring (key rotation + revocation). */
     sync(baseUrl: string, pubkeyUrl: string, options?: EngineSyncOptions): Promise<EngineSyncResult>;
     sync(baseUrl: string, pubkeyUrl: string, expectedBundleId?: string | null, expectedChannel?: string | null, options?: Omit<EngineSyncOptions, "expectedBundleId" | "expectedChannel">): Promise<EngineSyncResult>;
     /** Materialize a synced file's bytes from the active manifest. */

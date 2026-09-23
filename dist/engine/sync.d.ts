@@ -1,5 +1,6 @@
 import { IntegrityError } from "./integrity.js";
-import type { CacheStore, FetchBytes, IndexManifest, SyncResult, Verify } from "./types.js";
+import { type Keyring } from "./keyring.js";
+import type { CacheStore, FetchBytes, IndexManifest, SyncResult, Verify, VersionPointer } from "./types.js";
 export type SyncProgress = {
     readonly phase: "pointer";
     readonly version: string;
@@ -20,7 +21,16 @@ export interface SyncArgs {
     readonly baseUrl: string;
     readonly store: CacheStore;
     readonly fetchBytes: FetchBytes;
+    /** Single-verifier seam: authoritative for every signature. A pointer's
+     * `key_id` is covered by the signature but cannot select a key here; use
+     * {@link KeyringSyncArgs} for key selection and revocation. */
     readonly verify: Verify;
+    /** Mutually exclusive with `verify`; see {@link KeyringSyncArgs}. */
+    readonly keyring?: never;
+    /** Clock for `expires_at`, in Unix SECONDS (fractions allowed). Defaults to
+     * `Date.now() / 1000`. Read only for pointers that carry `expires_at`; a
+     * non-finite reading fails closed with a TypeError. */
+    readonly now?: () => number;
     /** undefined skips the check; null requires a legacy absent/null identity. */
     readonly expectedBundleId?: string | null;
     /** undefined skips the check; null requires a legacy absent/null channel. */
@@ -39,12 +49,35 @@ export interface SyncArgs {
 }
 /** Maximum silent backoff before one chunk fetch is declared unreachable. */
 export declare const MAX_CHUNK_RETRY_BUDGET_MS: number;
+/** Sync verified under a trust-root keyring instead of a single verifier:
+ * `key_id` selects the key, revoked keys never verify, and an unknown key
+ * fails closed. Exactly one of `verify` / `keyring` must be supplied. */
+export interface KeyringSyncArgs extends Omit<SyncArgs, "verify" | "keyring"> {
+    readonly keyring: Keyring;
+    readonly verify?: never;
+}
 export declare class SyncCapError extends IntegrityError {
     constructor(message: string);
 }
 export declare class RollbackError extends IntegrityError {
     constructor(message: string);
 }
-export declare function syncIndex(args: SyncArgs): Promise<SyncResult>;
+/** A validly signed network pointer is at or past its signed `expires_at`:
+ * the publisher no longer vouches that it is current (a freeze/replay). */
+export declare class PointerExpiredError extends IntegrityError {
+    constructor(message?: string);
+}
+/** The exact bytes a pointer's signature covers: canonical JSON without
+ * `signature`, and without any optional field that is null or absent — so a
+ * pointer that predates an optional field keeps its original preimage. */
+export declare function pointerSigningBytes(pointer: VersionPointer): Uint8Array;
+/**
+ * Sync the signed bundle at `baseUrl` into `store`, verified by exactly one
+ * of `verify` (a single verifier) or `keyring` (key selection + revocation).
+ * A network pointer at or past its signed `expires_at` is refused with
+ * {@link PointerExpiredError}; an offline sync may still serve an expired
+ * cached bundle, flagged `expired: true`.
+ */
+export declare function syncIndex(args: SyncArgs | KeyringSyncArgs): Promise<SyncResult>;
 export declare function materializeFile(store: CacheStore, manifest: IndexManifest, path: string): Promise<Uint8Array>;
 //# sourceMappingURL=sync.d.ts.map

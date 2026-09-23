@@ -1,9 +1,11 @@
 // Signed-bundle sync state machine. Every attacker-controlled dimension is
 // bounded before allocation/fetch, and promotion remains the final operation.
+import { optionalExpiry, optionalKeyId } from "./activePointer.js";
 import { canonicalBytes } from "./canonical.js";
 import { sha256Hex } from "./crypto.js";
 import { NetworkError } from "./fetchBytes.js";
 import { IntegrityError, MAX_DECOMPRESSED_CHUNK_BYTES } from "./integrity.js";
+import { assertKeyring, verifyWithKeyring } from "./keyring.js";
 import { isQuotaError } from "./storageError.js";
 const DECODER = new TextDecoder();
 const SHA256 = /^[0-9a-f]{64}$/u;
@@ -37,6 +39,14 @@ export class RollbackError extends IntegrityError {
     constructor(message) {
         super(message);
         this.name = "RollbackError";
+    }
+}
+/** A validly signed network pointer is at or past its signed `expires_at`:
+ * the publisher no longer vouches that it is current (a freeze/replay). */
+export class PointerExpiredError extends IntegrityError {
+    constructor(message = "signed latest pointer has expired") {
+        super(message);
+        this.name = "PointerExpiredError";
     }
 }
 function parseJson(bytes, label) {
@@ -85,6 +95,12 @@ function assertVersionPointer(value, requireSequence = true) {
             !validSequence)) {
         throw new IntegrityError("signed latest pointer is missing a non-negative monotonic sequence");
     }
+    if (!optionalKeyId(pointer.key_id)) {
+        throw new IntegrityError("pointer key_id must be 16 lowercase hex characters or null");
+    }
+    if (!optionalExpiry(pointer.expires_at)) {
+        throw new IntegrityError("pointer expires_at must be a positive safe integer (Unix seconds) or null");
+    }
     for (const field of ["bundle_id", "channel"]) {
         const item = pointer[field];
         if (item !== undefined &&
@@ -94,14 +110,41 @@ function assertVersionPointer(value, requireSequence = true) {
         }
     }
 }
-function pointerSigningBytes(pointer) {
+/** The exact bytes a pointer's signature covers: canonical JSON without
+ * `signature`, and without any optional field that is null or absent — so a
+ * pointer that predates an optional field keeps its original preimage. */
+export function pointerSigningBytes(pointer) {
     return canonicalBytes(pointer, {
         exclude: {
             signature: true,
             ...(pointer.bundle_id == null ? { bundle_id: true } : {}),
             ...(pointer.channel == null ? { channel: true } : {}),
+            ...(pointer.key_id == null ? { key_id: true } : {}),
+            ...(pointer.expires_at == null ? { expires_at: true } : {}),
         },
     });
+}
+async function pointerAuthenticator(args) {
+    const { verify, keyring } = args;
+    if ((verify === undefined) === (keyring === undefined)) {
+        throw new TypeError("syncIndex needs exactly one of verify or keyring");
+    }
+    if (keyring !== undefined) {
+        await assertKeyring(keyring);
+        return (pointer) => verifyWithKeyring(keyring, pointerSigningBytes(pointer), pointer.signature, pointer.key_id);
+    }
+    return (pointer) => verify(pointerSigningBytes(pointer), pointer.signature);
+}
+/** True once a pointer's signed deadline has passed. The clock is read only
+ * when the pointer carries `expires_at`. */
+function isExpired(pointer, args) {
+    if (pointer.expires_at == null)
+        return false;
+    const now = (args.now ?? (() => Date.now() / 1000))();
+    if (!Number.isFinite(now)) {
+        throw new TypeError("sync clock must return finite Unix seconds");
+    }
+    return now >= pointer.expires_at;
 }
 async function fetchCapped(fetchBytes, url, maxBytes, options = {}) {
     const bytes = await fetchBytes(url, { ...options, maxBytes });
@@ -110,11 +153,11 @@ async function fetchCapped(fetchBytes, url, maxBytes, options = {}) {
     }
     return bytes;
 }
-async function fetchPointer(baseUrl, fetchBytes, verify) {
+async function fetchPointer(baseUrl, fetchBytes, authenticate) {
     const raw = await fetchCapped(fetchBytes, `${baseUrl}/latest`, MAX_POINTER_BYTES, { cache: "no-store" });
     const pointer = parseJson(raw, "signed latest pointer");
     assertVersionPointer(pointer);
-    await verify(pointerSigningBytes(pointer), pointer.signature);
+    await authenticate(pointer);
     return pointer;
 }
 /** Optional leading `v`, then dot-separated non-negative integers — and
@@ -462,13 +505,21 @@ function distinctChunks(files) {
     return new Set(files.flatMap((entry) => entry.chunks.map((ref) => ref.hash)))
         .size;
 }
-async function syncFromCache(store, args, verify) {
+/**
+ * Offline: serve the cached bundle only under a signature the CURRENT trust
+ * root verifies (by `key_id` when present, else any unrevoked key), so a cache
+ * signed by a since-revoked key is refused. An expired cached pointer is still
+ * served — refusing it would brick an offline PWA holding intact, authentic
+ * bytes — but the result carries `expired: true` for the app to surface.
+ */
+async function syncFromCache(store, args, authenticate) {
     const active = await store.readActive();
     if (active === null)
         return null;
     assertVersionPointer(active, false);
-    await verify(pointerSigningBytes(active), active.signature);
+    await authenticate(active);
     assertExpectedIdentity(active, args);
+    const expired = isExpired(active, args);
     const raw = await store.getManifest(active.manifest_hash);
     const manifest = parseJson(raw, "cached manifest");
     assertManifest(manifest, active);
@@ -485,19 +536,21 @@ async function syncFromCache(store, args, verify) {
         chunksFetched: 0,
         chunksReused: distinctChunks(files),
         bytesFetched: 0,
+        ...(expired ? { expired: true } : {}),
     };
 }
 /**
  * The anti-rollback floor: the durable active pointer, read WITHOUT re-verifying
- * its signature under the currently pinned key.
+ * its signature under the currently pinned key or keyring.
  *
  * Re-verifying it and discarding it on a SignatureError would let any key
  * change (a planned rotation, or a swapped pinned key) silently reset the
  * floor: the next pointer — including an OLD release re-signed by the new key —
  * would then be promoted with no freshness comparison at all. The floor only
  * ever REFUSES; it never grants trust. Serving the cached bundle still demands
- * a signature valid under the current key (`syncFromCache`), so a pointer the
- * current key cannot verify is a floor but never a source of bytes. This
+ * a signature valid under the current trust root (`syncFromCache`), so a
+ * pointer it cannot verify — including one signed by a since-revoked key — is
+ * a floor but never a source of bytes. This
  * matches edge-proc's `cas.py`, which never re-verifies its stored pointer.
  *
  * The cost is deliberate and fail-closed: a corrupted or tampered durable
@@ -512,20 +565,31 @@ async function rollbackFloor(store, args) {
     assertExpectedIdentity(active, args);
     return active;
 }
+/**
+ * Sync the signed bundle at `baseUrl` into `store`, verified by exactly one
+ * of `verify` (a single verifier) or `keyring` (key selection + revocation).
+ * A network pointer at or past its signed `expires_at` is refused with
+ * {@link PointerExpiredError}; an offline sync may still serve an expired
+ * cached bundle, flagged `expired: true`.
+ */
 export async function syncIndex(args) {
     validateWantedPaths(args.wantedPaths);
-    const { baseUrl, store, fetchBytes, verify } = args;
+    const authenticate = await pointerAuthenticator(args);
+    const { baseUrl, store, fetchBytes } = args;
     let pointer;
     try {
-        pointer = await fetchPointer(baseUrl, fetchBytes, verify);
+        pointer = await fetchPointer(baseUrl, fetchBytes, authenticate);
     }
     catch (error) {
         if (error instanceof NetworkError) {
-            const cached = await syncFromCache(store, args, verify);
+            const cached = await syncFromCache(store, args, authenticate);
             if (cached !== null)
                 return cached;
         }
         throw error;
+    }
+    if (isExpired(pointer, args)) {
+        throw new PointerExpiredError();
     }
     assertExpectedIdentity(pointer, args);
     report(args, { phase: "pointer", version: pointer.version });
@@ -564,7 +628,7 @@ export async function syncIndex(args) {
     catch (error) {
         if (active !== null && isQuotaError(error)) {
             try {
-                const cached = await syncFromCache(store, args, verify);
+                const cached = await syncFromCache(store, args, authenticate);
                 if (cached !== null)
                     return cached;
             }

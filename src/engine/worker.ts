@@ -5,7 +5,6 @@
 /// <reference lib="webworker" />
 
 import { cacheDatabaseName, runWithCacheLock } from "./cacheLock.js";
-import { verifyEd25519 } from "./crypto.js";
 import { classifyEngineError } from "./engineError.js";
 import { fetchBytes } from "./fetchBytes.js";
 import {
@@ -13,6 +12,7 @@ import {
 	type IndexedDbLayoutOptions,
 	resolveIndexedDbLayout,
 } from "./indexedDbStore.js";
+import { loadTrustRoot } from "./keyring.js";
 import { installNetworkSentinel } from "./networkSentinel.js";
 import {
 	openPersistentCacheStore,
@@ -85,10 +85,6 @@ function store(
 	return storeState.promise;
 }
 
-async function loadPubkey(pubkeyUrl: string): Promise<Uint8Array> {
-	return fetchBytes(pubkeyUrl, { cache: "no-store" });
-}
-
 async function handleSync(req: SyncRequest): Promise<EngineResponse> {
 	requestPersistentStorage(navigator.storage);
 	const namespace = req.cacheNamespace ?? "edgeproc-browser";
@@ -102,13 +98,14 @@ async function handleSync(req: SyncRequest): Promise<EngineResponse> {
 	return runWithCacheLock(
 		lockManager(),
 		async () => {
-			const pubkey = await loadPubkey(req.pubkeyUrl);
+			// The trust root: a legacy raw 32-byte key (a keyring of one) or an
+			// edgeproc.keyring/v1 JSON document, fetched no-store and size-capped.
+			const keyring = await loadTrustRoot(req.pubkeyUrl, fetchBytes);
 			const result = await syncIndex({
 				baseUrl: req.baseUrl,
 				store: cacheStore,
 				fetchBytes,
-				verify: (message, signature) =>
-					verifyEd25519(pubkey, message, signature),
+				keyring,
 				...(req.expectedBundleId === undefined
 					? {}
 					: { expectedBundleId: req.expectedBundleId }),

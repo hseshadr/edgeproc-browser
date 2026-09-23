@@ -27,7 +27,8 @@ ships, the latest minor of the current major will be supported as well.
 
 `@edgeproc/browser` deliberately performs network and browser-storage I/O. Its
 security boundary is a signed, monotonic pointer: the Worker fetches a pinned
-public key without HTTP-cache reuse, verifies the pointer, content-addresses the
+trust root (a public key or a keyring) without HTTP-cache reuse, verifies the
+pointer, content-addresses the
 manifest, bounds compressed and expanded bytes, verifies every chunk and
 reassembled file, then promotes last. Invalid bytes never become a degraded
 result.
@@ -47,11 +48,53 @@ Important integration rules:
   pinned key cannot verify it (after a key rotation, or a swapped key), so a key
   change never resets the floor: an older release re-signed by a new key is
   refused as a rollback. The floor only refuses; the cached bundle is served
-  offline only under a signature the current key verifies. A key rotation must
-  therefore keep the publisher's `sequence` increasing. Rotation is a
-  coordinated re-sign plus an app release shipping the new public key; there is
-  no keyring, revocation list, or pointer expiry yet (see edge-proc's
-  `docs/OPERATIONS.md`).
+  offline only under a signature the current trust root verifies. A key
+  rotation must therefore keep the publisher's `sequence` increasing.
+
+### Trust root, rotation, revocation, and expiry
+
+- **Trust root forms.** The configured URL serves either exactly 32 bytes (the
+  legacy raw Ed25519 key, a keyring of one) or a strict
+  `edgeproc.keyring/v1` JSON keyring. The keyring is size-capped (64 KiB)
+  before decoding, rejects unknown fields, duplicate ids, malformed hex, and
+  any `key_id` that is not the first 16 hex chars of sha256 of its key, and
+  must leave at least one key unrevoked. A malformed trust root verifies
+  nothing (`KeyringError`). It is fetched `no-store`, same as before; whoever
+  controls it controls trust, so host it apart from mutable bundle content.
+- **Rotation.** Publish a keyring listing old key A and new key B, then sign
+  new pointers with B and a `key_id` naming B at a higher `sequence`. Clients
+  keep verifying A-signed caches while A is listed and unrevoked. Extending an
+  `expires_at` or switching signer for the same release also needs a new
+  `sequence`: the persistent stores refuse to promote a pointer that differs
+  from the active one in any signed field at the same sequence.
+- **Revocation.** Listing a key id in `revoked` makes every signature by that
+  key fail: a pointer naming it fails with `KeyRevokedError`, and a pointer
+  without `key_id` is only tried against unrevoked keys. A cached bundle whose
+  pointer was signed by a now-revoked key is refused for offline serving
+  (fail closed), yet that pointer remains the anti-rollback floor, so revoking
+  a key never lets an older release back in.
+- **Unknown signer.** A pointer whose `key_id` is not in the keyring fails
+  with `UnknownKeyError`; there is no fallback to other keys.
+- **Expiry (freeze/replay defense).** `expires_at` is signed Unix seconds. A
+  network-fetched pointer is refused with `PointerExpiredError` once
+  `now >= expires_at`, checked after its signature verifies. A publisher using
+  expiry must re-sign (with a higher `sequence`) before the deadline, or every
+  online client stops updating.
+- **Offline-expired policy (deliberate).** When the origin is unreachable,
+  sync serves the already-verified cached bundle even if its pointer has
+  expired, and marks the result `expired: true`. Refusing would brick offline
+  PWAs that hold intact, authentic bytes; the flag lets the application tell
+  the user the data may be stale. Applications that must never show expired
+  data should treat `expired: true` as a failure.
+- **Clock.** Expiry uses the device clock (`Date.now() / 1000`) unless a
+  `now()` is injected. A client whose clock runs slow can accept a pointer
+  past its deadline; one running fast refuses early. Expiry bounds replay
+  windows; it is not a secure time source.
+- **Single-verifier callers.** Code that calls `syncIndex` with its own
+  `verify` function keeps its behavior. `key_id` is covered by the signature
+  but cannot select a key on that path; `expires_at` is still enforced.
+### Other integration rules
+
 - Worker error messages can include URLs or producer-controlled identifiers.
   Do not render them as HTML and do not place secrets in bundle paths or URLs.
 - The network sentinel is evidence about requests, not an access-control

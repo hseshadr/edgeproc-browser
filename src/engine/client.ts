@@ -109,7 +109,9 @@ export class EngineClient {
 		});
 	}
 
-	/** Sync the signed bundle at `baseUrl`, pinning the raw pubkey at `pubkeyUrl`. */
+	/** Sync the signed bundle at `baseUrl`, pinning the trust root at
+	 * `pubkeyUrl`: a raw 32-byte Ed25519 key, or an `edgeproc.keyring/v1` JSON
+	 * keyring (key rotation + revocation). */
 	public sync(
 		baseUrl: string,
 		pubkeyUrl: string,

@@ -88,6 +88,51 @@ Chunk transport failures classified as `NetworkError` receive six bounded
 attempts with exponential jitter (9 seconds maximum backoff). Integrity,
 signature, storage, and rollback failures are verdicts and are never retried.
 
+### The trust root: one key, or a keyring
+
+`pubkeyUrl` is the trust root, fetched `no-store` and capped at 64 KiB. It is
+auto-detected:
+
+- **exactly 32 bytes** — a raw Ed25519 public key, exactly as before (a
+  keyring of one);
+- **anything else** — a strict JSON keyring:
+
+```json
+{
+  "schema": "edgeproc.keyring/v1",
+  "keys": [
+    { "key_id": "34750f98bd59fcfc", "public_key": "8a88e3dd…6f5c" },
+    { "key_id": "6a3803d5f059902a", "public_key": "8139770e…b394" }
+  ],
+  "revoked": []
+}
+```
+
+`key_id` is the first 16 lowercase hex characters of sha256 of the raw 32-byte
+public key (`deriveKeyId`), and must match its key. Unknown fields, duplicates,
+and a ring with no unrevoked key are rejected (`KeyringError`).
+
+A pointer may carry two optional signed fields. Both are left out of the
+signed bytes when absent, so existing pointers verify unchanged:
+
+- `key_id` — only that key may verify it. A revoked id fails with
+  `KeyRevokedError`, an unlisted one with `UnknownKeyError`. Without `key_id`,
+  any unrevoked key may verify; a revoked key never does.
+- `expires_at` — Unix seconds. A pointer fetched from the network at or past
+  its deadline fails with `PointerExpiredError`. **Offline**, an expired
+  pointer whose bundle is already cached and verified is still served, with
+  `expired: true` on the sync result, so an offline PWA keeps working and can
+  tell the user the data may be stale.
+
+To rotate, publish a keyring with both keys, sign the next pointer with the
+new key at a higher `sequence`, then revoke the old key. The last promoted
+pointer stays the rollback floor through all of it. See
+[SECURITY.md](SECURITY.md) for the full policy.
+
+Calling `syncIndex` directly, pass `keyring` (from `parseTrustRoot` or
+`loadTrustRoot`) or a single `verify` function, not both. `now` injects the
+expiry clock in Unix seconds.
+
 To count what a Worker actually fetched, listen on the sentinel channel:
 
 ```ts
@@ -220,6 +265,9 @@ An unverifiable byte is not a degraded byte, it is a rejected one. Every path th
 | Failure | Error |
 |---|---|
 | signature does not verify | `SignatureError` |
+| pointer names a revoked / unlisted signer | `KeyRevokedError` / `UnknownKeyError` (both `SignatureError`) |
+| trust root is malformed | `KeyringError` (an `IntegrityError`) |
+| network pointer is past its signed `expires_at` | `PointerExpiredError` (an `IntegrityError`) |
 | chunk hash ≠ content address | `IntegrityError` |
 | decompressed size ≠ signed size | `IntegrityError` |
 | response past its byte cap | `ResponseTooLargeError` (an `IntegrityError`, deliberately — sync must never fall back to cache for it) |
@@ -229,7 +277,7 @@ An unverifiable byte is not a degraded byte, it is a rejected one. Every path th
 | Worker went silent | `WorkerTimeoutError` |
 | Worker operation failed | `EngineOperationError` with `integrity`, `rollback`, `network`, `storage`, or `internal` code |
 
-A network outage is the *only* condition that may serve cache, and it is a distinct type (`NetworkError`) for exactly that reason.
+A network outage is the *only* condition that may serve cache, and it is a distinct type (`NetworkError`) for exactly that reason. The Worker boundary reports every keyring and expiry failure with the existing `integrity` code.
 
 ## What is deliberately NOT here
 

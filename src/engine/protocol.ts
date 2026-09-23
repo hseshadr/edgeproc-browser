@@ -7,7 +7,8 @@ import type { IndexedDbLayoutOptions } from "./indexedDbStore.js";
 import type { SyncProgress } from "./sync.js";
 import type { EngineSyncResult, StoragePreference } from "./types.js";
 
-/** Sync the signed bundle at `baseUrl`, pinning the raw pubkey at `pubkeyUrl`. */
+/** Sync the signed bundle at `baseUrl`, pinning the trust root at `pubkeyUrl`:
+ * a raw 32-byte Ed25519 key, or an `edgeproc.keyring/v1` JSON keyring. */
 export interface SyncRequest {
 	readonly kind: "sync";
 	readonly id: number;
