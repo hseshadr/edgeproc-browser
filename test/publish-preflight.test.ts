@@ -13,6 +13,7 @@ import {
 	existsSync,
 	mkdirSync,
 	mkdtempSync,
+	readFileSync,
 	rmSync,
 	writeFileSync,
 } from "node:fs";
@@ -249,5 +250,116 @@ describe("publish preflight", () => {
 		expect(output).toMatch(/preflight OK/);
 		expect(existsSync(stale)).toBe(false);
 		expect(existsSync(join(dir, "dist"))).toBe(false);
+	});
+});
+
+// `preflight` DELETES dist/, and the `gate` that follows runs typecheck BEFORE
+// build. So any public entry point that resolves only through `exports` ->
+// dist/ makes `npm publish` structurally impossible: typecheck dies on TS2307
+// against a path the build will not produce until two steps later. CI never
+// sees it, because `prepare` builds on install and nothing deletes dist there.
+// That is exactly why 0.1.0 had never been published. The typecheck tsconfig
+// must therefore resolve every public entry from SOURCE.
+const PACKAGE_JSON = fileURLToPath(new URL("../package.json", import.meta.url));
+const TSCONFIG = fileURLToPath(new URL("../tsconfig.json", import.meta.url));
+const SOURCE_ROOT = fileURLToPath(new URL("..", import.meta.url));
+
+/** Every public subpath in `exports`, as the specifier a consumer would write. */
+function publicSpecifiers(): readonly string[] {
+	const pkg = JSON.parse(readFileSync(PACKAGE_JSON, "utf8"));
+	return Object.keys(pkg.exports)
+		.filter((key) => key !== "./package.json")
+		.map((key) => (key === "." ? pkg.name : `${pkg.name}${key.slice(1)}`));
+}
+
+/** Strip JSONC comments that sit outside string literals, then trailing commas. */
+function stripJsonComments(text: string): string {
+	let out = "";
+	let inString = false;
+	let inLine = false;
+	let inBlock = false;
+
+	for (let i = 0; i < text.length; i += 1) {
+		const ch = text[i] ?? "";
+		const next = text[i + 1] ?? "";
+
+		if (inLine) {
+			if (ch === "\n") {
+				inLine = false;
+				out += ch;
+			}
+		} else if (inBlock) {
+			if (ch === "*" && next === "/") {
+				inBlock = false;
+				i += 1;
+			}
+		} else if (inString) {
+			out += ch;
+			if (ch === "\\") {
+				out += next;
+				i += 1;
+			} else if (ch === '"') {
+				inString = false;
+			}
+		} else if (ch === '"') {
+			inString = true;
+			out += ch;
+		} else if (ch === "/" && next === "/") {
+			inLine = true;
+			i += 1;
+		} else if (ch === "/" && next === "*") {
+			inBlock = true;
+			i += 1;
+		} else {
+			out += ch;
+		}
+	}
+
+	return out.replace(/,(\s*[}\]])/g, "$1");
+}
+
+/** `compilerOptions.paths` from the JSONC typecheck config. */
+function typecheckPaths(): Record<string, string[]> {
+	const raw = stripJsonComments(readFileSync(TSCONFIG, "utf8"));
+	return JSON.parse(raw).compilerOptions?.paths ?? {};
+}
+
+describe("the publish gate survives the dist that preflight deletes", () => {
+	it("finds public entry points to check (guards against a vacuous pass)", () => {
+		expect(publicSpecifiers().length).toBeGreaterThan(1);
+		expect(publicSpecifiers()).toContain("@edgeproc/browser");
+	});
+
+	it("resolves every public entry point from source, not from dist", () => {
+		const paths = typecheckPaths();
+
+		const unmapped = publicSpecifiers().filter(
+			(specifier) => paths[specifier] === undefined,
+		);
+
+		expect(unmapped).toEqual([]);
+	});
+
+	it("points every mapping at a source file that exists", () => {
+		const paths = typecheckPaths();
+
+		const broken = Object.entries(paths).flatMap(([specifier, targets]) =>
+			targets
+				.filter((target) => !existsSync(join(SOURCE_ROOT, target)))
+				.map((target) => `${specifier} -> ${target}`),
+		);
+
+		expect(broken).toEqual([]);
+	});
+
+	it("never points a mapping into dist, which publishing removes", () => {
+		const intoDist = Object.entries(typecheckPaths()).flatMap(
+			([specifier, targets]) =>
+				targets
+					.filter((target) => target.replace("./", "").startsWith("dist/"))
+					.map((target) => `${specifier} -> ${target}`),
+		);
+
+		expect(intoDist).toEqual([]);
 	});
 });
