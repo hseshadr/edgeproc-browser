@@ -13,9 +13,13 @@
 		   README's "Consuming this package" note — it is not bare-Node ESM. */
 		"moduleResolution": "Bundler",
 		"paths": {
+			"@edgeproc/browser": ["./src/index.ts"],
+			"@edgeproc/browser/spawn": ["./src/engine/spawn.ts"],
 			"@edgeproc/browser/sqlite": ["./src/sqlite/index.ts"],
+			"@edgeproc/browser/vector": ["./src/vector/index.ts"],
 			"@edgeproc/browser/vector/sqlite": ["./src/vector/sqlite/index.ts"],
-			"@edgeproc/browser/vector/sqlite/node": ["./src/vector/sqlite/node.ts"]
+			"@edgeproc/browser/vector/sqlite/node": ["./src/vector/sqlite/node.ts"],
+			"@edgeproc/browser/worker": ["./src/engine/worker.ts"]
 		},
 		"moduleDetection": "force",
 		"verbatimModuleSyntax": true,
